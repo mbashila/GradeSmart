@@ -1,10 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Header from "../components/Header";
@@ -13,58 +15,91 @@ import Skeleton, { SkeletonCircle } from "../components/Skeleton";
 import AnimatedScreen from "../components/AnimatedScreen";
 import { colors } from "../theme/colors";
 import { typography } from "../theme/typography";
+import { useTests } from "../context/TestsContext";
+import { useScans } from "../context/ScansContext";
+import storage from "../utils/storage";
 
 export default function HistoryScreen({ navigation }) {
   const [selectedFilter, setSelectedFilter] = useState("all"); // 'all', 'recent', 'by-subject'
   const [loading, setLoading] = useState(true);
+  const { tests } = useTests();
+  const { scans } = useScans();
+  const [hydrated, setHydrated] = useState(false);
 
-  const tests = [
-    {
-      id: 1,
-      name: "Math Quiz - Class 5A",
-      date: "April 24, 2024",
-      subject: "Math",
-      classRoom: "5A",
-      papersGraded: 22,
-      averageScore: 88,
-      status: "completed",
-    },
-    {
-      id: 2,
-      name: "History Test - Class 7B",
-      date: "April 20, 2024",
-      subject: "History",
-      classRoom: "7B",
-      papersGraded: 28,
-      averageScore: 82,
-      status: "completed",
-    },
-    {
-      id: 3,
-      name: "Science Exam - Class 6C",
-      date: "April 18, 2024",
-      subject: "Science",
-      classRoom: "6C",
-      papersGraded: 11,
-      averageScore: 80,
-      status: "completed",
-    },
-    {
-      id: 4,
-      name: "English Quiz - Class 8A",
-      date: "April 15, 2024",
-      subject: "English",
-      classRoom: "8A",
-      papersGraded: 25,
-      averageScore: 87,
-      status: "completed",
-    },
-  ];
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const saved = await storage.getItem('@gradesmart:history-filter');
+        if (mounted && saved) setSelectedFilter(saved);
+      } finally {
+        if (mounted) setHydrated(true);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  const parsePercentage = (scan, totalPoints) => {
+    const p = scan?.percentage;
+    if (typeof p === 'number') return p;
+    if (typeof p === 'string') {
+      const n = parseFloat(p.replace('%',''));
+      if (!isNaN(n)) return n;
+    }
+    const s = parseFloat(scan?.score);
+    const t = parseFloat(totalPoints);
+    if (!isNaN(s) && !isNaN(t) && t > 0) return (s / t) * 100;
+    return null;
+  };
+
+  const enrichedTests = React.useMemo(() => {
+    return (tests || []).map((t) => {
+      const testId = t.id;
+      const related = scans.filter((s) => s.testId === testId);
+      const papersGraded = related.length;
+      let avg = 0;
+      if (papersGraded > 0) {
+        const nums = related.map((s) => parsePercentage(s, t.totalPoints)).filter((n) => typeof n === 'number');
+        avg = nums.length > 0 ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) : 0;
+      }
+      return {
+        ...t,
+        papersGraded,
+        averageScore: avg,
+      };
+    }).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  }, [tests, scans]);
+
+  const filteredTests = useMemo(() => {
+    if (selectedFilter === 'recent') {
+      return enrichedTests.slice(0, 10);
+    }
+    if (selectedFilter === 'by-subject') {
+      return enrichedTests.slice().sort((a, b) => (a.subject || '').localeCompare(b.subject || '') || (new Date(b.createdAt || 0) - new Date(a.createdAt || 0)));
+    }
+    return enrichedTests;
+  }, [enrichedTests, selectedFilter]);
+
+  const sectionTitleText = selectedFilter === 'all' ? 'All Tests' : selectedFilter === 'recent' ? 'Recent Tests' : 'Tests by Subject';
+
+  const totalTests = tests.length;
+  const totalScans = scans.length;
+  const overallAvg = React.useMemo(() => {
+    if (totalScans === 0) return 0;
+    const nums = scans.map((s) => parsePercentage(s, s?.testData?.totalPoints)).filter((n) => typeof n === 'number');
+    if (nums.length === 0) return 0;
+    return Math.round(nums.reduce((a, b) => a + b, 0) / nums.length);
+  }, [scans]);
 
   useEffect(() => {
     const t = setTimeout(() => setLoading(false), 650);
     return () => clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    storage.setItem('@gradesmart:history-filter', selectedFilter);
+  }, [selectedFilter, hydrated]);
 
   const getScoreColor = (score) => {
     if (score >= 85) return colors.success;
@@ -74,43 +109,37 @@ export default function HistoryScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      <Header
-        title="Test History"
-        onBack={() => navigation.goBack()}
-        rightIcon="search-outline"
-        onRightPress={() => {}}
-      />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}>
+        <Header
+          title="Test History"
+          onBack={() => navigation.goBack()}
+          rightIcon="search-outline"
+          onRightPress={() => {}}
+        />
 
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-      >
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
         {/* Summary Statistics */}
         <AnimatedScreen>
           <View style={styles.summarySection}>
             <Card style={styles.summaryCard}>
               <View style={styles.summaryRow}>
                 <View style={styles.summaryItem}>
-                  <Text style={styles.summaryValue}>{tests.length}</Text>
-                  <Text style={styles.summaryLabel}>Total Tests</Text>
+                  <Text style={styles.summaryValue}>{totalTests}</Text>
+                  <Text style={styles.summaryLabel}>Tests</Text>
                 </View>
                 <View style={styles.summaryDivider} />
                 <View style={styles.summaryItem}>
-                  <Text style={styles.summaryValue}>
-                    {tests.reduce((sum, t) => sum + t.papersGraded, 0)}
-                  </Text>
-                  <Text style={styles.summaryLabel}>Papers Graded</Text>
+                  <Text style={styles.summaryValue}>{totalScans}</Text>
+                  <Text style={styles.summaryLabel}>Scans</Text>
                 </View>
                 <View style={styles.summaryDivider} />
                 <View style={styles.summaryItem}>
-                  <Text style={styles.summaryValue}>
-                    {Math.round(
-                      tests.reduce((sum, t) => sum + t.averageScore, 0) /
-                        tests.length
-                    )}
-                    %
-                  </Text>
-                  <Text style={styles.summaryLabel}>Avg Score</Text>
+                  <Text style={styles.summaryValue}>{overallAvg}%</Text>
+                  <Text style={styles.summaryLabel}>Average</Text>
                 </View>
               </View>
             </Card>
@@ -173,10 +202,11 @@ export default function HistoryScreen({ navigation }) {
           </View>
         </AnimatedScreen>
 
-        {/* Tests List */}
+        {/* Tests List */
+        }
         <AnimatedScreen delay={160}>
           <View style={styles.testsSection}>
-            <Text style={styles.sectionTitle}>All Tests</Text>
+            <Text style={styles.sectionTitle}>{sectionTitleText}</Text>
 
             {loading ? (
               [1,2,3,4].map((idx) => (
@@ -204,14 +234,14 @@ export default function HistoryScreen({ navigation }) {
                   </View>
                 </Card>
               ))
-            ) : tests.length === 0 ? (
+            ) : enrichedTests.length === 0 ? (
               <Card style={[styles.testCard, { alignItems: 'center' }] }>
                 <Ionicons name="document-text-outline" size={40} color={colors.secondary} />
                 <Text style={[typography.h4, { color: colors.text, marginTop: 8 }]}>No test history yet</Text>
                 <Text style={[typography.body, { color: colors.textSecondary, marginTop: 4 }]}>Create and grade a test to see it here.</Text>
               </Card>
             ) : (
-              tests.map((test) => (
+              filteredTests.map((test) => (
                 <Card
                   key={test.id}
                   style={styles.testCard}
@@ -220,14 +250,14 @@ export default function HistoryScreen({ navigation }) {
                   <View style={styles.testCardHeader}>
                     <View style={styles.testCardInfo}>
                       <View style={styles.testCardTitleRow}>
-                        <Text style={styles.testCardName}>{test.name}</Text>
+                        <Text style={styles.testCardName}>{test.name || test.testName || 'Untitled Test'}</Text>
                         <View style={styles.subjectBadge}>
                           <Text style={styles.subjectBadgeText}>
                             {test.subject}
                           </Text>
                         </View>
                       </View>
-                      <Text style={styles.testCardDate}>{test.date}</Text>
+                      <Text style={styles.testCardDate}>{test.createdAt ? new Date(test.createdAt).toLocaleDateString() : ''}</Text>
                     </View>
                     <View
                       style={[
@@ -263,9 +293,7 @@ export default function HistoryScreen({ navigation }) {
                         size={16}
                         color={colors.textSecondary}
                       />
-                      <Text style={styles.testCardStatText}>
-                        {test.papersGraded} papers
-                      </Text>
+                      <Text style={styles.testCardStatText}>{test.papersGraded} scans</Text>
                     </View>
                     <Ionicons
                       name="chevron-forward"
@@ -279,6 +307,7 @@ export default function HistoryScreen({ navigation }) {
           </View>
         </AnimatedScreen>
       </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }

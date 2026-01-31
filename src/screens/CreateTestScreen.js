@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import Header from '../components/Header';
 import Input from '../components/Input';
 import Button from '../components/Button';
@@ -9,9 +9,11 @@ import Stepper from '../components/Stepper';
 import { useToast } from '../components/Toast';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
+import { useTests } from '../context/TestsContext';
 
 export default function CreateTestScreen({ navigation, route }) {
   const { showToast } = useToast();
+  const { addTest } = useTests();
   const [testName, setTestName] = useState(route?.params?.testName || '');
   const [subject, setSubject] = useState(route?.params?.subject || '');
   const [classRoom, setClassRoom] = useState(route?.params?.classRoom || '');
@@ -45,8 +47,14 @@ export default function CreateTestScreen({ navigation, route }) {
       showToast('Please complete required fields', 'error');
       return;
     }
+    const id = route?.params?.id || route?.params?.testId || Date.now().toString();
+    try {
+      addTest({ id, name: testName, testName, subject, classRoom, numberOfQuestions, totalPoints });
+    } catch {}
     showToast('Details saved', 'success');
     navigation.navigate('QuestionType', {
+      id,
+      testId: id,
       testName,
       subject,
       classRoom,
@@ -63,12 +71,13 @@ export default function CreateTestScreen({ navigation, route }) {
         rightAction="Save"
         onRightPress={handleContinue}
       />
-      
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-      >
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
         <Stepper steps={['Details', 'Questions', 'Review']} current={0} />
         <AnimatedScreen>
           <View style={styles.content}>
@@ -123,7 +132,8 @@ export default function CreateTestScreen({ navigation, route }) {
             />
           </View>
         </AnimatedScreen>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -140,6 +150,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 24,
     paddingBottom: 40,
+    flexGrow: 1,
   },
   content: {
     flex: 1,

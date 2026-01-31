@@ -1,24 +1,31 @@
 import React from 'react';
-import { View, Text, StyleSheet, Image, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Image, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
+import Input from '../components/Input';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 
 export default function ScanConfirmationScreen({ navigation, route }) {
-  const { imageUri, testData } = route.params || {};
+  const { imageUri, images: imagesParam, testData } = route.params || {};
+  const images = React.useMemo(() => {
+    if (imagesParam && Array.isArray(imagesParam) && imagesParam.length > 0) return imagesParam;
+    return imageUri ? [imageUri] : [];
+  }, [imagesParam, imageUri]);
   const [detectedScore] = React.useState('32');
   const [detectedPercentage] = React.useState('80%');
+  const [studentName, setStudentName] = React.useState(route?.params?.studentName || '');
   
   const handleConfirm = () => {
     // Process the scan and navigate to results
     navigation.navigate('Results', {
-      imageUri,
+      imageUri: images[0],
+      images,
       testData,
-      studentName: 'Mary Johnson', // This would come from OCR
+      studentName: studentName || 'Student',
       score: detectedScore,
       percentage: detectedPercentage,
     });
@@ -34,22 +41,35 @@ export default function ScanConfirmationScreen({ navigation, route }) {
         title="Confirm Scan"
         onBack={handleRetake}
       />
-      
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-      >
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={80}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
         <AnimatedScreen>
           <View style={styles.content}>
             <Text style={styles.title}>Scan Preview</Text>
             <Text style={styles.subtitle}>
               Review the scanned paper before proceeding
             </Text>
+            {!!images?.length && (
+              <Text style={styles.pagesCaptured}>Pages captured: {images.length}</Text>
+            )}
+            <Input
+              label="Student Name"
+              value={studentName}
+              onChangeText={setStudentName}
+              placeholder="Enter student name"
+              iconName="person-outline"
+              returnKeyType="done"
+              style={{ marginBottom: 16 }}
+            />
             
             {/* Scanned Image */}
             <Card style={styles.imageCard}>
               <Image
-                source={{ uri: imageUri }}
+                source={{ uri: images[0] }}
                 style={styles.scannedImage}
                 resizeMode="contain"
               />
@@ -71,8 +91,13 @@ export default function ScanConfirmationScreen({ navigation, route }) {
               </View>
               
               <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Pages Captured:</Text>
+                <Text style={styles.summaryValue}>{images.length || 1}</Text>
+              </View>
+              
+              <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Student Name:</Text>
-                <Text style={styles.summaryValue}>Mary Johnson</Text>
+                <Text style={styles.summaryValue}>{studentName || 'Student'}</Text>
               </View>
               
               <View style={styles.summaryRow}>
@@ -120,7 +145,8 @@ export default function ScanConfirmationScreen({ navigation, route }) {
             />
           </View>
         </AnimatedScreen>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -150,6 +176,11 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textSecondary,
     marginBottom: 24,
+  },
+  pagesCaptured: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    marginBottom: 8,
   },
   imageCard: {
     padding: 0,

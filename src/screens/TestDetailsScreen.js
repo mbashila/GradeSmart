@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import Card from '../components/Card';
@@ -7,19 +7,57 @@ import Button from '../components/Button';
 import AnimatedScreen from '../components/AnimatedScreen';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
+import { useScans } from '../context/ScansContext';
 
 export default function TestDetailsScreen({ navigation, route }) {
   const { test } = route.params || {};
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'analytics'
+  const { scans } = useScans();
+  const related = (scans || []).filter((s) => s.testId === (test?.id || test?.testId));
+
+  const normalizePercentage = (scan) => {
+    const p = scan?.percentage;
+    if (typeof p === 'number') return p;
+    if (typeof p === 'string') {
+      const n = parseFloat(p.replace('%', ''));
+      if (!isNaN(n)) return n;
+    }
+    const s = parseFloat(scan?.score);
+    const t = parseFloat(test?.totalPoints);
+    if (!isNaN(s) && !isNaN(t) && t > 0) return (s / t) * 100;
+    return null;
+  };
+
+  const getLetterGrade = (pct) => {
+    if (pct == null) return '-';
+    if (pct >= 85) return 'A';
+    if (pct >= 70) return 'B';
+    if (pct >= 60) return 'C';
+    return 'D';
+  };
+
+  const students = related
+    .map((s) => {
+      const pct = normalizePercentage(s);
+      return {
+        id: s.id,
+        name: s.studentName || 'Student',
+        score: s.score ?? null,
+        percentage: pct != null ? Math.round(pct) : null,
+        grade: getLetterGrade(pct),
+        status: 'graded',
+      };
+    })
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   
-  // Mock student data
-  const students = [
-    { id: 1, name: 'Elizabeth Rivera', score: 95, percentage: 95, grade: 'A', status: 'graded' },
-    { id: 2, name: 'James Lee', score: 90, percentage: 90, grade: 'A', status: 'graded' },
-    { id: 3, name: 'Mary Johnson', score: 80, percentage: 80, grade: 'B', status: 'graded' },
-    { id: 4, name: 'Emily Carter', score: 46, percentage: 75, grade: 'C', status: 'graded' },
-    { id: 5, name: 'Alden Harris', score: 70, percentage: 70, grade: 'C', status: 'graded' },
-  ];
+  const classAverage = (() => {
+    if (Array.isArray(students) && students.length > 0) {
+      const nums = students.map((s) => s.percentage).filter((n) => typeof n === 'number');
+      if (nums.length === 0) return 0;
+      return Math.round(nums.reduce((a, b) => a + b, 0) / nums.length);
+    }
+    return test?.averageScore || 0;
+  })();
   
   const getGradeColor = (grade) => {
     switch (grade) {
@@ -38,17 +76,23 @@ export default function TestDetailsScreen({ navigation, route }) {
   
   return (
     <View style={styles.container}>
-      <Header
-        title={test?.name || 'Test Details'}
-        onBack={() => navigation.goBack()}
-        rightIcon="ellipsis-vertical"
-        onRightPress={() => {}}
-      />
-      
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
       >
+        <Header
+          title={test?.name || 'Test Details'}
+          onBack={() => navigation.goBack()}
+          rightIcon="ellipsis-vertical"
+          onRightPress={() => {}}
+        />
+
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
         {/* Test Info Card */}
         <AnimatedScreen>
           <Card style={styles.infoCard}>
@@ -56,7 +100,7 @@ export default function TestDetailsScreen({ navigation, route }) {
               <View style={styles.infoItem}>
                 <Ionicons name="calendar" size={20} color={colors.textSecondary} />
                 <Text style={styles.infoLabel}>Date</Text>
-                <Text style={styles.infoValue}>{test?.date || 'N/A'}</Text>
+                <Text style={styles.infoValue}>{test?.date || (test?.createdAt ? new Date(test.createdAt).toLocaleDateString() : 'N/A')}</Text>
               </View>
               <View style={styles.infoItem}>
                 <Ionicons name="people" size={20} color={colors.textSecondary} />
@@ -65,14 +109,14 @@ export default function TestDetailsScreen({ navigation, route }) {
               </View>
               <View style={styles.infoItem}>
                 <Ionicons name="document-text" size={20} color={colors.textSecondary} />
-                <Text style={styles.infoLabel}>Papers</Text>
-                <Text style={styles.infoValue}>{test?.papersGraded || 0}</Text>
+                <Text style={styles.infoLabel}>Scans</Text>
+                <Text style={styles.infoValue}>{test?.papersGraded || related.length}</Text>
               </View>
             </View>
             
             <View style={styles.averageScore}>
               <Text style={styles.averageScoreLabel}>Class Average</Text>
-              <Text style={styles.averageScoreValue}>{test?.averageScore || 0}%</Text>
+              <Text style={styles.averageScoreValue}>{classAverage}%</Text>
             </View>
           </Card>
         </AnimatedScreen>
@@ -227,24 +271,24 @@ export default function TestDetailsScreen({ navigation, route }) {
             </View>
           </AnimatedScreen>
         )}
-      </ScrollView>
-      
-      {/* Action Buttons */}
-      <AnimatedScreen delay={220}>
-        <View style={styles.actions}>
-          <Button
-            title="Export Results"
-            onPress={() => {}}
-            variant="outline"
-            style={styles.exportButton}
-          />
-          <Button
-            title="Continue Grading"
-            onPress={() => navigation.navigate('Scan', { testData: test })}
-            variant="primary"
-          />
-        </View>
-      </AnimatedScreen>
+        </ScrollView>
+
+        <AnimatedScreen delay={220}>
+          <View style={styles.actions}>
+            <Button
+              title="Export Results"
+              onPress={() => {}}
+              variant="outline"
+              style={styles.exportButton}
+            />
+            <Button
+              title="Continue Grading"
+              onPress={() => navigation.navigate('Scan', { testData: test })}
+              variant="primary"
+            />
+          </View>
+        </AnimatedScreen>
+      </KeyboardAvoidingView>
     </View>
   );
 }

@@ -1,5 +1,6 @@
 import React, { useRef } from 'react';
 import { Animated, Pressable, Vibration } from 'react-native';
+import { useHaptics } from '../context/HapticsContext';
 
 export default function PressableScale({
   children,
@@ -12,6 +13,7 @@ export default function PressableScale({
   haptic = false,
 }) {
   const scale = useRef(new Animated.Value(1)).current;
+  const { enabled: hapticsEnabled } = useHaptics();
 
   const animateTo = (toValue) => {
     Animated.timing(scale, {
@@ -25,7 +27,7 @@ export default function PressableScale({
   const handlePressOut = () => animateTo(1);
 
   const handlePress = (e) => {
-    if (haptic) {
+    if (haptic && hapticsEnabled) {
       try { Vibration.vibrate(10); } catch (_) {}
     }
     if (onPress) onPress(e);

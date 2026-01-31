@@ -5,40 +5,36 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
 import PressableScale from '../components/PressableScale';
-import Skeleton, { SkeletonCircle } from '../components/Skeleton';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { useNotifications } from '../context/NotificationsContext';
 import { elevation } from '../theme/elevation';
+import { useScans } from '../context/ScansContext';
+import { useTests } from '../context/TestsContext';
 
 export default function DashboardScreen({ navigation }) {
   const { unreadCount } = useNotifications();
-  const [loadingRecent, setLoadingRecent] = useState(true);
   const { width } = useWindowDimensions();
   const isTablet = width >= 900;
-  useEffect(() => {
-    const t = setTimeout(() => setLoadingRecent(false), 650);
-    return () => clearTimeout(t);
-  }, []);
+  const { scans } = useScans();
+  const { tests } = useTests();
+  const scannedCount = scans.length;
+  const testsCreated = tests.length;
+  const gradedTestsCount = React.useMemo(() => {
+    const ids = new Set();
+    scans.forEach((s) => {
+      if (s?.testId) ids.add(s.testId);
+    });
+    return ids.size;
+  }, [scans]);
+  const recentScansList = React.useMemo(() => (
+    scans
+      .slice()
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 3)
+  ), [scans]);
 
-  const recentTests = [
-    {
-      id: 1,
-      name: 'Math Quiz - Class 5A',
-      date: 'April 24, 2024',
-      papersGraded: 22,
-      averageScore: 88,
-      subject: 'Math',
-    },
-    {
-      id: 2,
-      name: 'History Test - Class 7B',
-      date: 'April 20, 2024',
-      papersGraded: 28,
-      averageScore: 82,
-      subject: 'History',
-    },
-  ];
+  
   
   return (
     <View style={styles.container}>
@@ -71,17 +67,24 @@ export default function DashboardScreen({ navigation }) {
                   <View style={styles.statsRow}>
                     <View style={styles.statCard}>
                       <View style={styles.statIconWrap}>
+                        <Ionicons name="albums-outline" size={20} color={colors.secondary} />
+                      </View>
+                      <Text style={styles.statValue}>{testsCreated}</Text>
+                      <Text style={styles.statLabel}>Tests</Text>
+                    </View>
+                    <View style={styles.statCard}>
+                      <View style={styles.statIconWrap}>
                         <Ionicons name="document-text-outline" size={20} color={colors.secondary} />
                       </View>
-                      <Text style={styles.statValue}>0</Text>
-                      <Text style={styles.statLabel}>Tests Graded</Text>
+                      <Text style={styles.statValue}>{gradedTestsCount}</Text>
+                      <Text style={styles.statLabel}>Graded Tests</Text>
                     </View>
                     <View style={styles.statCard}>
                       <View style={styles.statIconWrap}>
                         <Ionicons name="scan-outline" size={20} color={colors.secondary} />
                       </View>
-                      <Text style={styles.statValue}>0</Text>
-                      <Text style={styles.statLabel}>Papers Scanned</Text>
+                      <Text style={styles.statValue}>{scannedCount}</Text>
+                      <Text style={styles.statLabel}>Scans</Text>
                     </View>
                   </View>
                 </View>
@@ -127,70 +130,7 @@ export default function DashboardScreen({ navigation }) {
                 </View>
               </AnimatedScreen>
 
-              <AnimatedScreen delay={180}>
-                <View style={[styles.section, styles.noPadX]}>
-                  <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>Recent Tests</Text>
-                    <PressableScale onPress={() => navigation.navigate('History')} containerStyle={styles.viewAllBtn} haptic={true}>
-                      <Ionicons name="refresh-circle" size={18} color={colors.textSecondary} />
-                      <Text style={styles.viewAllText}>View all</Text>
-                    </PressableScale>
-                  </View>
-                  <View style={styles.recentGrid}>
-                    {loadingRecent ? (
-                      [1,2].map((idx) => (
-                        <Card key={idx} style={[styles.testCard, styles.testCardTablet]}>
-                          <View style={styles.testCardHeader}>
-                            <View style={styles.testCardInfo}>
-                              <Skeleton width={'70%'} height={16} />
-                              <Skeleton width={'40%'} height={12} style={{ marginTop: 8 }} />
-                            </View>
-                            <Skeleton width={42} height={24} radius={12} />
-                          </View>
-                          <View style={styles.testCardFooter}>
-                            <View style={styles.testCardStat}>
-                              <SkeletonCircle size={16} />
-                              <Skeleton width={120} height={12} style={{ marginLeft: 8 }} />
-                            </View>
-                            <Skeleton width={20} height={20} radius={10} />
-                          </View>
-                        </Card>
-                      ))
-                    ) : recentTests.length === 0 ? (
-                      <Card style={[styles.testCard, styles.testCardTablet, { alignItems: 'center' }] }>
-                        <Ionicons name="document-text-outline" size={40} color={colors.secondary} />
-                        <Text style={[typography.h4, { color: colors.text, marginTop: 8 }]}>No recent tests</Text>
-                        <Text style={[typography.body, { color: colors.textSecondary, marginTop: 4 }]}>Create your first test to see it here.</Text>
-                      </Card>
-                    ) : (
-                      recentTests.map((test) => (
-                        <Card
-                          key={test.id}
-                          style={[styles.testCard, styles.testCardTablet]}
-                          onPress={() => navigation.navigate('TestDetails', { test })}
-                        >
-                          <View style={styles.testCardHeader}>
-                            <View style={styles.testCardInfo}>
-                              <Text style={styles.testCardName}>{test.name}</Text>
-                              <Text style={styles.testCardDate}>{test.date}</Text>
-                            </View>
-                            <View style={styles.testCardScore}>
-                              <Text style={styles.testCardScoreText}>{test.averageScore}%</Text>
-                            </View>
-                          </View>
-                          <View style={styles.testCardFooter}>
-                            <View style={styles.testCardStat}>
-                              <Ionicons name="document-text" size={16} color={colors.textSecondary} />
-                              <Text style={styles.testCardStatText}>{test.papersGraded} papers graded</Text>
-                            </View>
-                            <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
-                          </View>
-                        </Card>
-                      ))
-                    )}
-                  </View>
-                </View>
-              </AnimatedScreen>
+              
             </View>
           </View>
         ) : (
@@ -216,17 +156,24 @@ export default function DashboardScreen({ navigation }) {
                 <View style={styles.statsRow}>
                   <View style={styles.statCard}>
                     <View style={styles.statIconWrap}>
+                      <Ionicons name="albums-outline" size={20} color={colors.secondary} />
+                    </View>
+                    <Text style={styles.statValue}>{testsCreated}</Text>
+                    <Text style={styles.statLabel}>Tests</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <View style={styles.statIconWrap}>
                       <Ionicons name="document-text-outline" size={20} color={colors.secondary} />
                     </View>
-                    <Text style={styles.statValue}>0</Text>
-                    <Text style={styles.statLabel}>Tests Graded</Text>
+                    <Text style={styles.statValue}>{gradedTestsCount}</Text>
+                    <Text style={styles.statLabel}>Graded Tests</Text>
                   </View>
                   <View style={styles.statCard}>
                     <View style={styles.statIconWrap}>
                       <Ionicons name="scan-outline" size={20} color={colors.secondary} />
                     </View>
-                    <Text style={styles.statValue}>0</Text>
-                    <Text style={styles.statLabel}>Papers Scanned</Text>
+                    <Text style={styles.statValue}>{scannedCount}</Text>
+                    <Text style={styles.statLabel}>Scans</Text>
                   </View>
                 </View>
               </View>
@@ -268,72 +215,7 @@ export default function DashboardScreen({ navigation }) {
                 </PressableScale>
               </View>
             </AnimatedScreen>
-            <AnimatedScreen delay={180}>
-              <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Recent Tests</Text>
-                  <PressableScale onPress={() => navigation.navigate('History')} containerStyle={styles.viewAllBtn} haptic={true}>
-                    <Ionicons name="refresh-circle" size={18} color={colors.textSecondary} />
-                    <Text style={styles.viewAllText}>View all</Text>
-                  </PressableScale>
-                </View>
-                
-                <View style={isTablet ? styles.recentGrid : undefined}>
-                  {loadingRecent ? (
-                    [1,2].map((idx) => (
-                      <Card key={idx} style={styles.testCard}>
-                        <View style={styles.testCardHeader}>
-                          <View style={styles.testCardInfo}>
-                            <Skeleton width={'70%'} height={16} />
-                            <Skeleton width={'40%'} height={12} style={{ marginTop: 8 }} />
-                          </View>
-                          <Skeleton width={42} height={24} radius={12} />
-                        </View>
-                        <View style={styles.testCardFooter}>
-                          <View style={styles.testCardStat}>
-                            <SkeletonCircle size={16} />
-                            <Skeleton width={120} height={12} style={{ marginLeft: 8 }} />
-                          </View>
-                          <Skeleton width={20} height={20} radius={10} />
-                        </View>
-                      </Card>
-                    ))
-                  ) : recentTests.length === 0 ? (
-                    <Card style={[styles.testCard, { alignItems: 'center' }] }>
-                      <Ionicons name="document-text-outline" size={40} color={colors.secondary} />
-                      <Text style={[typography.h4, { color: colors.text, marginTop: 8 }]}>No recent tests</Text>
-                      <Text style={[typography.body, { color: colors.textSecondary, marginTop: 4 }]}>Create your first test to see it here.</Text>
-                    </Card>
-                  ) : (
-                    recentTests.map((test) => (
-                      <Card
-                        key={test.id}
-                        style={styles.testCard}
-                        onPress={() => navigation.navigate('TestDetails', { test })}
-                      >
-                        <View style={styles.testCardHeader}>
-                          <View style={styles.testCardInfo}>
-                            <Text style={styles.testCardName}>{test.name}</Text>
-                            <Text style={styles.testCardDate}>{test.date}</Text>
-                          </View>
-                          <View style={styles.testCardScore}>
-                            <Text style={styles.testCardScoreText}>{test.averageScore}%</Text>
-                          </View>
-                        </View>
-                        
-                        <View style={styles.testCardFooter}>
-                          <View style={styles.testCardStat}>
-                            <Ionicons name="document-text" size={16} color={colors.textSecondary} />
-                            <Text style={styles.testCardStatText}>{test.papersGraded} papers graded</Text>
-                          </View>
-                          <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
-                        </View>
-                      </Card>
-                    ))
-                  )}
-                </View>
-              </View>
-            </AnimatedScreen>
+            
           </>
         )}
         
@@ -345,6 +227,46 @@ export default function DashboardScreen({ navigation }) {
               <Text style={styles.quickActionText}>Continue Unfinished Scans</Text>
               <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
             </PressableScale>
+          </View>
+        </AnimatedScreen>
+        <AnimatedScreen delay={300}>
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Recent Scans</Text>
+            {recentScansList.length === 0 ? (
+              <Card style={[styles.testCard, { alignItems: 'center' }] }>
+                <Ionicons name="scan-outline" size={40} color={colors.secondary} />
+                <Text style={[typography.h4, { color: colors.text, marginTop: 8 }]}>No scans yet</Text>
+                <Text style={[typography.body, { color: colors.textSecondary, marginTop: 4 }]}>Scan a paper to see it here.</Text>
+              </Card>
+            ) : (
+              recentScansList.map((scan) => (
+                <Card
+                  key={scan.id}
+                  style={styles.testCard}
+                  onPress={() => navigation.navigate('Results', {
+                    studentName: scan.studentName,
+                    score: scan.score,
+                    percentage: scan.percentage,
+                    testData: scan.testData,
+                    images: scan.images,
+                  })}
+                >
+                  <View style={styles.testCardHeader}>
+                    <View style={styles.testCardInfo}>
+                      <Text style={styles.testCardName}>{scan.studentName || 'Student'}</Text>
+                      <Text style={styles.testCardDate}>{new Date(scan.createdAt).toLocaleString()}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.testCardFooter}>
+                    <View style={styles.testCardStat}>
+                      <Ionicons name="document-text-outline" size={16} color={colors.textSecondary} />
+                      <Text style={styles.testCardStatText}>{scan.pages || (scan.images ? scan.images.length : 0)} pages</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
+                  </View>
+                </Card>
+              ))
+            )}
           </View>
         </AnimatedScreen>
       </ScrollView>

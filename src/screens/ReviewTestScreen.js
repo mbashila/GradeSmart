@@ -9,14 +9,20 @@ import Stepper from '../components/Stepper';
 import { useToast } from '../components/Toast';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
+import { useTests } from '../context/TestsContext';
 
 export default function ReviewTestScreen({ navigation, route }) {
   const testData = route.params || {};
   const { showToast } = useToast();
+  const { addTest } = useTests();
   
   const handleStartScanning = () => {
+    const testId = testData?.id || route?.params?.testId || Date.now().toString();
+    try {
+      addTest({ id: testId, ...testData });
+    } catch {}
     showToast('Review confirmed', 'success');
-    navigation.navigate('Scan', { testData });
+    navigation.navigate('Scan', { testData: { ...testData, id: testId }, testId });
   };
   
   const getQuestionTypeLabel = (type) => {

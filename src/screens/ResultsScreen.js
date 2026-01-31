@@ -7,10 +7,15 @@ import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
+import { useScans } from '../context/ScansContext';
+import { useToast } from '../components/Toast';
 
 export default function ResultsScreen({ navigation, route }) {
-  const { studentName, score, percentage, testData } = route.params || {};
+  const { studentName, score, percentage, testData, images } = route.params || {};
   const [currentView, setCurrentView] = useState('individual'); // 'individual' or 'list'
+  const { addScan } = useScans();
+  const { showToast } = useToast();
+  const testId = route?.params?.testId || testData?.id || null;
   
   // Mock data for individual results
   const individualResults = [
@@ -32,8 +37,22 @@ export default function ResultsScreen({ navigation, route }) {
   };
   
   const handleNext = () => {
-    // Navigate to next student or back to scan
-    navigation.navigate('Scan', { testData });
+    // Save scanned paper to context, then navigate to next student or back to scan
+    try {
+      addScan({
+        studentName: studentName || 'Student',
+        score: score || null,
+        percentage: percentage || null,
+        testData: testData || {},
+        images: images || [],
+        pages: Array.isArray(images) ? images.length : (images ? 1 : 0),
+        testId,
+      });
+    } catch (e) {
+      // no-op; saving is best-effort for now
+    }
+    showToast('Saved to Recent Scans', 'success');
+    navigation.navigate('Dashboard');
   };
   
   return (
@@ -52,6 +71,9 @@ export default function ResultsScreen({ navigation, route }) {
         <AnimatedScreen>
           <View style={styles.studentInfo}>
             <Text style={styles.studentName}>{studentName || 'Student Name'}</Text>
+            {!!images?.length && (
+              <Text style={styles.pagesInfo}>Pages captured: {images.length}</Text>
+            )}
           </View>
         </AnimatedScreen>
         

@@ -5,6 +5,9 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { NotificationsProvider } from './src/context/NotificationsContext';
 import { ToastProvider } from './src/components/Toast';
+import { ScansProvider } from './src/context/ScansContext';
+import { TestsProvider } from './src/context/TestsContext';
+import { HapticsProvider } from './src/context/HapticsContext';
 import { colors } from './src/theme/colors';
 
 import WelcomeScreen from './src/screens/WelcomeScreen';
@@ -29,37 +32,43 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <NotificationsProvider>
-        <ToastProvider>
-          <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['top']}>
-            <NavigationContainer>
-              <StatusBar style="dark" translucent={false} backgroundColor={colors.background} />
-              <Stack.Navigator
-              initialRouteName="Welcome"
-              screenOptions={{
-                headerShown: false,
-                cardStyle: { backgroundColor: colors.background },
-                ...TransitionPresets.ModalSlideFromBottomIOS,
-              }}
-            >
-              <Stack.Screen name="Welcome" component={WelcomeScreen} />
-              <Stack.Screen name="Login" component={LoginScreen} />
-              <Stack.Screen name="SignUp" component={SignUpScreen} />
-              <Stack.Screen name="Dashboard" component={DashboardScreen} />
-              <Stack.Screen name="CreateTest" component={CreateTestScreen} />
-              <Stack.Screen name="QuestionType" component={QuestionTypeScreen} />
-              <Stack.Screen name="ReviewTest" component={ReviewTestScreen} />
-              <Stack.Screen name="Scan" component={ScanScreen} />
-              <Stack.Screen name="ScanConfirmation" component={ScanConfirmationScreen} />
-              <Stack.Screen name="Results" component={ResultsScreen} />
-              <Stack.Screen name="ReviewCorrection" component={ReviewCorrectionScreen} />
-              <Stack.Screen name="History" component={HistoryScreen} />
-              <Stack.Screen name="TestDetails" component={TestDetailsScreen} />
-              <Stack.Screen name="Profile" component={ProfileScreen} />
-              <Stack.Screen name="Notifications" component={NotificationsScreen} />
-              </Stack.Navigator>
-            </NavigationContainer>
-          </SafeAreaView>
-        </ToastProvider>
+        <HapticsProvider>
+          <TestsProvider>
+            <ScansProvider>
+              <ToastProvider>
+                <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['top']}>
+                  <NavigationContainer>
+                    <StatusBar style="dark" translucent={false} backgroundColor={colors.background} />
+                    <Stack.Navigator
+                    initialRouteName="Welcome"
+                    screenOptions={{
+                      headerShown: false,
+                      cardStyle: { backgroundColor: colors.background },
+                      ...TransitionPresets.ModalSlideFromBottomIOS,
+                    }}
+                  >
+                    <Stack.Screen name="Welcome" component={WelcomeScreen} />
+                    <Stack.Screen name="Login" component={LoginScreen} />
+                    <Stack.Screen name="SignUp" component={SignUpScreen} />
+                    <Stack.Screen name="Dashboard" component={DashboardScreen} />
+                    <Stack.Screen name="CreateTest" component={CreateTestScreen} />
+                    <Stack.Screen name="QuestionType" component={QuestionTypeScreen} />
+                    <Stack.Screen name="ReviewTest" component={ReviewTestScreen} />
+                    <Stack.Screen name="Scan" component={ScanScreen} />
+                    <Stack.Screen name="ScanConfirmation" component={ScanConfirmationScreen} />
+                    <Stack.Screen name="Results" component={ResultsScreen} />
+                    <Stack.Screen name="ReviewCorrection" component={ReviewCorrectionScreen} />
+                    <Stack.Screen name="History" component={HistoryScreen} />
+                    <Stack.Screen name="TestDetails" component={TestDetailsScreen} />
+                    <Stack.Screen name="Profile" component={ProfileScreen} />
+                    <Stack.Screen name="Notifications" component={NotificationsScreen} />
+                    </Stack.Navigator>
+                  </NavigationContainer>
+                </SafeAreaView>
+              </ToastProvider>
+            </ScansProvider>
+          </TestsProvider>
+        </HapticsProvider>
       </NotificationsProvider>
     </SafeAreaProvider>
   );

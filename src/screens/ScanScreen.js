@@ -1,9 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import AnimatedScreen from '../components/AnimatedScreen';
+import Button from '../components/Button';
+import Input from '../components/Input';
+import Stepper from '../components/Stepper';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 
@@ -15,6 +18,11 @@ export default function ScanScreen({ navigation, route }) {
   const [flash, setFlash] = useState('off');
   const cameraRef = useRef(null);
   const testData = route?.params?.testData || {};
+  const [expectedPages, setExpectedPages] = useState(
+    route?.params?.expectedPages ? Number(route.params.expectedPages) : null
+  );
+  const [setupPages, setSetupPages] = useState('1');
+  const [images, setImages] = useState([]);
   
   const handleCapture = async () => {
     if (cameraRef.current) {
@@ -23,16 +31,27 @@ export default function ScanScreen({ navigation, route }) {
           quality: 0.8,
           base64: false,
         });
-        
-        // Navigate to confirmation screen with captured image
-        navigation.navigate('ScanConfirmation', {
-          imageUri: photo.uri,
-          testData,
-        });
+        const nextImages = [...images, photo.uri];
+        setImages(nextImages);
+        if (expectedPages && nextImages.length >= expectedPages) {
+          navigation.navigate('ScanConfirmation', {
+            images: nextImages,
+            testData,
+          });
+        }
       } catch (error) {
         Alert.alert('Error', 'Failed to capture image. Please try again.');
       }
     }
+  };
+  
+  const startCapture = () => {
+    const count = parseInt(setupPages, 10);
+    if (isNaN(count) || count < 1) {
+      Alert.alert('Invalid number', 'Please enter a valid number of pages (1 or more).');
+      return;
+    }
+    setExpectedPages(count);
   };
   
   const toggleFlash = () => {
@@ -71,6 +90,29 @@ export default function ScanScreen({ navigation, route }) {
     );
   }
   
+  if (expectedPages === null) {
+    return (
+      <View style={styles.container}>
+        <Header title="Scan Paper" onBack={() => navigation.goBack()} />
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <AnimatedScreen style={styles.centerContent}>
+            <Text style={styles.message}>How many pages are you capturing for this student?</Text>
+            <Text style={styles.subMessage}>You can change this next time. Default is 1.</Text>
+            <Input
+              label="Number of pages"
+              value={setupPages}
+              onChangeText={setSetupPages}
+              keyboardType="number-pad"
+              placeholder="e.g. 1 or 2"
+              style={{ alignSelf: 'stretch' }}
+            />
+            <Button title="Start Capturing" onPress={startCapture} variant="primary" />
+          </AnimatedScreen>
+        </KeyboardAvoidingView>
+      </View>
+    );
+  }
+  
   return (
     <View style={styles.container}>
       <AnimatedScreen>
@@ -93,6 +135,16 @@ export default function ScanScreen({ navigation, route }) {
       >
         {/* Overlay Guide */}
         <AnimatedScreen style={styles.overlay} delay={60}>
+          <View style={styles.progressHeader}>
+            <Text style={styles.progressText}>
+              Page {Math.min(images.length + 1, expectedPages)} of {expectedPages}
+            </Text>
+            <Stepper
+              steps={Array.from({ length: expectedPages }, () => 'Page')}
+              current={Math.min(images.length, Math.max(expectedPages - 1, 0))}
+              style={styles.stepper}
+            />
+          </View>
           <View style={styles.guideContainer}>
             <View style={styles.guideFrame}>
               <View style={[styles.corner, styles.topLeft]} />
@@ -190,6 +242,19 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: 'transparent',
+  },
+  progressHeader: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  progressText: {
+    ...typography.body,
+    color: colors.background,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  stepper: {
+    marginTop: 8,
   },
   guideContainer: {
     flex: 1,
