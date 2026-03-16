@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } fr
 import Header from '../components/Header';
 import Input from '../components/Input';
 import Button from '../components/Button';
-import Dropdown from '../components/Dropdown';
 import AnimatedScreen from '../components/AnimatedScreen';
 import Stepper from '../components/Stepper';
 import { useToast } from '../components/Toast';
@@ -19,28 +18,8 @@ export default function CreateTestScreen({ navigation, route }) {
   const [classRoom, setClassRoom] = useState(route?.params?.classRoom || '');
   const [numberOfQuestions, setNumberOfQuestions] = useState(route?.params?.numberOfQuestions || '');
   const [totalPoints, setTotalPoints] = useState(route?.params?.totalPoints || '');
+  const [numberOfStudents, setNumberOfStudents] = useState(route?.params?.numberOfStudents || '');
   
-  const subjects = [
-    { label: 'Math', value: 'Math' },
-    { label: 'Science', value: 'Science' },
-    { label: 'History', value: 'History' },
-    { label: 'English', value: 'English' },
-    { label: 'Geography', value: 'Geography' },
-    { label: 'Physics', value: 'Physics' },
-    { label: 'Chemistry', value: 'Chemistry' },
-  ];
-  
-  const classes = [
-    { label: '5A', value: '5A' },
-    { label: '5B', value: '5B' },
-    { label: '6A', value: '6A' },
-    { label: '6B', value: '6B' },
-    { label: '6C', value: '6C' },
-    { label: '7A', value: '7A' },
-    { label: '7B', value: '7B' },
-    { label: '8A', value: '8A' },
-    { label: '8B', value: '8B' },
-  ];
   
   const handleContinue = () => {
     if (!testName || !subject || !classRoom) {
@@ -49,7 +28,7 @@ export default function CreateTestScreen({ navigation, route }) {
     }
     const id = route?.params?.id || route?.params?.testId || Date.now().toString();
     try {
-      addTest({ id, name: testName, testName, subject, classRoom, numberOfQuestions, totalPoints });
+      addTest({ id, name: testName, testName, subject, classRoom, numberOfQuestions, totalPoints, numberOfStudents });
     } catch {}
     showToast('Details saved', 'success');
     navigation.navigate('QuestionType', {
@@ -60,6 +39,7 @@ export default function CreateTestScreen({ navigation, route }) {
       classRoom,
       numberOfQuestions,
       totalPoints,
+      numberOfStudents,
     });
   };
   
@@ -88,20 +68,18 @@ export default function CreateTestScreen({ navigation, route }) {
             placeholder="e.g., Science Exam - Class 6C"
             />
             
-            <Dropdown
+            <Input
               label="Subject"
               value={subject}
-              options={subjects}
-              onValueChange={setSubject}
-              placeholder="Select Subject"
+              onChangeText={setSubject}
+              placeholder="e.g., Mathematics, English, Science"
             />
             
-            <Dropdown
+            <Input
               label="Class"
               value={classRoom}
-              options={classes}
-              onValueChange={setClassRoom}
-              placeholder="Select Class"
+              onChangeText={setClassRoom}
+              placeholder="e.g., Grade 5A, Form 2B"
             />
             
             <Input
@@ -117,6 +95,14 @@ export default function CreateTestScreen({ navigation, route }) {
               value={totalPoints}
               onChangeText={setTotalPoints}
               placeholder="100"
+              keyboardType="numeric"
+            />
+            
+            <Input
+              label="Number of Students"
+              value={numberOfStudents}
+              onChangeText={setNumberOfStudents}
+              placeholder="e.g., 30"
               keyboardType="numeric"
             />
           </View>

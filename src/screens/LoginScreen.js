@@ -6,14 +6,29 @@ import Logo from '../components/Logo';
 import AnimatedScreen from '../components/AnimatedScreen';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../components/Toast';
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const { signIn, isConfigured } = useAuth();
+  const { showToast } = useToast();
   
   const handleLogin = () => {
-    // In a real app, this would authenticate the user
-    navigation.navigate('Dashboard');
+    if (!isConfigured) {
+      showToast('Supabase not configured. Add your credentials to app.json extra.', 'error');
+      return;
+    }
+    (async () => {
+      const { data, error } = await signIn({ email, password });
+      if (error) {
+        showToast(error.message || 'Sign-in failed', 'error');
+        return;
+      }
+      showToast('Signed in', 'success');
+      navigation.navigate('Dashboard');
+    })();
   };
   
   return (

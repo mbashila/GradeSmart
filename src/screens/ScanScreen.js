@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Alert, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import AnimatedScreen from '../components/AnimatedScreen';
@@ -9,6 +10,7 @@ import Input from '../components/Input';
 import Stepper from '../components/Stepper';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
+import { checkImageQuality } from '../utils/imageQuality';
 
 const { width, height } = Dimensions.get('window');
 
@@ -23,23 +25,46 @@ export default function ScanScreen({ navigation, route }) {
   );
   const [setupPages, setSetupPages] = useState('1');
   const [images, setImages] = useState([]);
-  
+  const [checking, setChecking] = useState(false);
+  const [paperDetected, setPaperDetected] = useState(null); // null = not yet checked, true = detected, false = not detected
+
+  const acceptImage = (uri) => {
+    const nextImages = [...images, uri];
+    setImages(nextImages);
+    if (expectedPages && nextImages.length >= expectedPages) {
+      navigation.navigate('ScanConfirmation', {
+        images: nextImages,
+        testData,
+      });
+    }
+  };
+
   const handleCapture = async () => {
     if (cameraRef.current) {
       try {
+        setChecking(true);
         const photo = await cameraRef.current.takePictureAsync({
           quality: 0.8,
           base64: false,
         });
-        const nextImages = [...images, photo.uri];
-        setImages(nextImages);
-        if (expectedPages && nextImages.length >= expectedPages) {
-          navigation.navigate('ScanConfirmation', {
-            images: nextImages,
-            testData,
-          });
+        const quality = await checkImageQuality(photo.uri);
+        setChecking(false);
+        setPaperDetected(quality.ok && quality.contrast > 30);
+
+        if (!quality.ok) {
+          Alert.alert(
+            'Poor Image Quality',
+            quality.issues.join('\n'),
+            [
+              { text: 'Retake', style: 'cancel' },
+              { text: 'Use Anyway', onPress: () => acceptImage(photo.uri) },
+            ]
+          );
+          return;
         }
+        acceptImage(photo.uri);
       } catch (error) {
+        setChecking(false);
         Alert.alert('Error', 'Failed to capture image. Please try again.');
       }
     }
@@ -54,6 +79,45 @@ export default function ScanScreen({ navigation, route }) {
     setExpectedPages(count);
   };
   
+  const handleGalleryPick = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: true,
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets?.length > 0) {
+        const picked = result.assets.map((a) => a.uri);
+        // Check quality of the first image
+        setChecking(true);
+        const quality = await checkImageQuality(picked[0]);
+        setChecking(false);
+
+        if (!quality.ok) {
+          Alert.alert(
+            'Poor Image Quality',
+            quality.issues.join('\n'),
+            [
+              { text: 'Pick Again', style: 'cancel' },
+              {
+                text: 'Use Anyway',
+                onPress: () => navigation.navigate('ScanConfirmation', { images: picked, testData }),
+              },
+            ]
+          );
+          return;
+        }
+        navigation.navigate('ScanConfirmation', {
+          images: picked,
+          testData,
+        });
+      }
+    } catch (error) {
+      setChecking(false);
+      Alert.alert('Error', 'Failed to open gallery. Please try again.');
+    }
+  };
+
   const toggleFlash = () => {
     setFlash(flash === 'off' ? 'on' : 'off');
   };
@@ -107,6 +171,7 @@ export default function ScanScreen({ navigation, route }) {
               style={{ alignSelf: 'stretch' }}
             />
             <Button title="Start Capturing" onPress={startCapture} variant="primary" />
+            <Button title="Pick from Gallery" onPress={handleGalleryPick} variant="outline" style={{ marginTop: 12 }} />
           </AnimatedScreen>
         </KeyboardAvoidingView>
       </View>
@@ -120,10 +185,7 @@ export default function ScanScreen({ navigation, route }) {
           title="Scan Paper" 
           onBack={() => navigation.goBack()}
           rightIcon="image-outline"
-          onRightPress={() => {
-            // Open gallery to select image
-            Alert.alert('Gallery', 'Gallery feature coming soon');
-          }}
+          onRightPress={handleGalleryPick}
         />
       </AnimatedScreen>
       
@@ -160,10 +222,27 @@ export default function ScanScreen({ navigation, route }) {
           
           {/* Live Feedback Area */}
           <View style={styles.feedbackContainer}>
-            <View style={styles.feedbackCard}>
-              <Ionicons name="checkmark-circle" size={20} color={colors.success} />
-              <Text style={styles.feedbackText}>Paper detected</Text>
-            </View>
+            {checking ? (
+              <View style={[styles.feedbackCard, styles.feedbackChecking]}>
+                <ActivityIndicator size="small" color="#fff" />
+                <Text style={styles.feedbackText}>Checking image...</Text>
+              </View>
+            ) : paperDetected === null ? (
+              <View style={[styles.feedbackCard, styles.feedbackChecking]}>
+                <Ionicons name="scan-outline" size={20} color="#fff" />
+                <Text style={styles.feedbackText}>Capture to detect paper</Text>
+              </View>
+            ) : paperDetected ? (
+              <View style={[styles.feedbackCard, styles.feedbackDetected]}>
+                <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                <Text style={styles.feedbackText}>Paper detected</Text>
+              </View>
+            ) : (
+              <View style={[styles.feedbackCard, styles.feedbackNotDetected]}>
+                <Ionicons name="close-circle" size={20} color="#fff" />
+                <Text style={styles.feedbackText}>No paper detected</Text>
+              </View>
+            )}
           </View>
         </AnimatedScreen>
         
@@ -180,13 +259,19 @@ export default function ScanScreen({ navigation, route }) {
             />
           </TouchableOpacity>
           
-          <TouchableOpacity
-            style={styles.captureButton}
-            onPress={handleCapture}
-            activeOpacity={0.8}
-          >
-            <View style={styles.captureButtonInner} />
-          </TouchableOpacity>
+          {checking ? (
+            <View style={styles.captureButton}>
+              <ActivityIndicator size="large" color={colors.accent} />
+            </View>
+          ) : (
+            <TouchableOpacity
+              style={styles.captureButton}
+              onPress={handleCapture}
+              activeOpacity={0.8}
+            >
+              <View style={styles.captureButtonInner} />
+            </TouchableOpacity>
+          )}
           
           <TouchableOpacity
             style={styles.controlButton}
@@ -318,10 +403,18 @@ const styles = StyleSheet.create({
   feedbackCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(76, 175, 80, 0.9)',
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
+  },
+  feedbackDetected: {
+    backgroundColor: 'rgba(76, 175, 80, 0.9)',
+  },
+  feedbackNotDetected: {
+    backgroundColor: 'rgba(244, 67, 54, 0.9)',
+  },
+  feedbackChecking: {
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
   },
   feedbackText: {
     ...typography.bodySmall,

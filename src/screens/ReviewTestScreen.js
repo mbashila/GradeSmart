@@ -119,6 +119,50 @@ export default function ReviewTestScreen({ navigation, route }) {
                 </Text>
               </View>
             </View>
+
+            {(testData?.questionType === 'multiple-choice' || testData?.questionType === 'mixed') && (
+              <View style={styles.detailRow}>
+                <View style={styles.detailIcon}>
+                  <Ionicons name="key" size={24} color={colors.secondary} />
+                </View>
+                <View style={styles.detailContent}>
+                  <Text style={styles.detailLabel}>MCQ Marking Key</Text>
+                  <Text style={styles.detailValue}>{testData?.markingKey || 'Not set'}</Text>
+                </View>
+              </View>
+            )}
+            {testData?.questionType === 'mixed' && (
+              <View style={styles.detailRow}>
+                <View style={styles.detailIcon}>
+                  <Ionicons name="radio-button-on" size={24} color={colors.secondary} />
+                </View>
+                <View style={styles.detailContent}>
+                  <Text style={styles.detailLabel}>MCQ Questions</Text>
+                  <Text style={styles.detailValue}>{testData?.mcqCount || 0}</Text>
+                </View>
+              </View>
+            )}
+
+            {testData?.questionTexts?.length > 0 && testData.questionTexts.some(q => q?.trim()) && (
+              <View style={{ marginTop: 4, marginBottom: 8 }}>
+                <View style={styles.detailRow}>
+                  <View style={styles.detailIcon}>
+                    <Ionicons name="create" size={24} color={colors.secondary} />
+                  </View>
+                  <View style={styles.detailContent}>
+                    <Text style={styles.detailLabel}>Essay Questions</Text>
+                  </View>
+                </View>
+                {testData.questionTexts.map((q, i) => q?.trim() ? (
+                  <View key={i} style={{ marginLeft: 52, marginBottom: 6 }}>
+                    <Text style={[typography.bodySmall, { color: colors.textSecondary }]}>
+                      Q{(testData.questionType === 'mixed' ? (parseInt(testData.mcqCount, 10) || 0) : 0) + i + 1}:
+                    </Text>
+                    <Text style={[typography.body, { color: colors.text }]}>{q}</Text>
+                  </View>
+                ) : null)}
+              </View>
+            )}
             </Card>
             
             <View style={styles.tipsCard}>

@@ -11,32 +11,24 @@ import { useScans } from '../context/ScansContext';
 import { useToast } from '../components/Toast';
 
 export default function ResultsScreen({ navigation, route }) {
-  const { studentName, score, percentage, testData, images } = route.params || {};
+  const { studentName, score, percentage, testData, images, gradingResults, gradingType } = route.params || {};
   const [currentView, setCurrentView] = useState('individual'); // 'individual' or 'list'
-  const { addScan } = useScans();
+  const { scans, addScan } = useScans();
   const { showToast } = useToast();
   const testId = route?.params?.testId || testData?.id || null;
+  const normalizedName = (studentName || 'Student').trim().toLowerCase();
+  const isExisting = scans?.some((s) => (s.testId === testId) && ((s.studentName || '').trim().toLowerCase() === normalizedName));
   
-  // Mock data for individual results
-  const individualResults = [
-    { question: 1, correct: 'A', student: 'A', status: 'correct', points: 2 },
-    { question: 2, correct: 'C', student: 'A', status: 'incorrect', points: 0 },
-    { question: 3, correct: 'A', student: 'B', status: 'incorrect', points: 0 },
-    { question: 4, correct: 'D', student: 'D', status: 'correct', points: 2 },
-    { question: 12, correct: 'D', student: 'C', status: 'incorrect', points: 0 },
-  ];
-  
-  const handleReview = () => {
-    navigation.navigate('ReviewCorrection', {
-      studentName,
-      score,
-      percentage,
-      results: individualResults,
-      testData,
-    });
-  };
+  const individualResults = gradingResults || [];
+  const correctCount = individualResults.filter(r => r.status === 'correct').length;
+  const incorrectCount = individualResults.filter(r => r.status === 'incorrect').length;
+  const partialCount = individualResults.filter(r => r.status === 'partial').length;
   
   const handleNext = () => {
+    if (isExisting) {
+      showToast('A saved result already exists for this student in this test and cannot be edited.', 'error');
+      return;
+    }
     // Save scanned paper to context, then navigate to next student or back to scan
     try {
       addScan({
@@ -47,6 +39,8 @@ export default function ResultsScreen({ navigation, route }) {
         images: images || [],
         pages: Array.isArray(images) ? images.length : (images ? 1 : 0),
         testId,
+        gradingResults: gradingResults || [],
+        gradingType: gradingType || null,
       });
     } catch (e) {
       // no-op; saving is best-effort for now
@@ -81,16 +75,31 @@ export default function ResultsScreen({ navigation, route }) {
           <Card style={styles.scoreCard}>
             <View style={styles.scoreMain}>
               <View style={styles.scoreLeft}>
-                <Text style={styles.scoreValue}>{score || '32.40'}</Text>
+                <Text style={styles.scoreValue}>{score || '0'}</Text>
                 <Text style={styles.scoreLabel}>Points Total</Text>
-                <Text style={styles.incorrectText}>
-                  {individualResults.filter(r => r.status === 'incorrect').length} Incorrect
-                </Text>
+                {incorrectCount > 0 && (
+                  <Text style={styles.incorrectText}>
+                    {incorrectCount} Incorrect
+                  </Text>
+                )}
+                {partialCount > 0 && (
+                  <Text style={[styles.incorrectText, { color: colors.warning }]}>
+                    {partialCount} Partial
+                  </Text>
+                )}
               </View>
               <View style={styles.scoreRight}>
-                <View style={styles.percentageCircle}>
-                  <Text style={styles.percentageValue}>{percentage || '80%'}</Text>
-                  <Ionicons name="checkmark-circle" size={40} color={colors.success} />
+                <View style={[styles.percentageCircle, {
+                  backgroundColor: (parseInt(percentage) >= 50 ? colors.success : colors.error) + '20',
+                }]}>
+                  <Text style={[styles.percentageValue, {
+                    color: parseInt(percentage) >= 50 ? colors.success : colors.error,
+                  }]}>{percentage || '0%'}</Text>
+                  <Ionicons
+                    name={parseInt(percentage) >= 50 ? 'checkmark-circle' : 'close-circle'}
+                    size={40}
+                    color={parseInt(percentage) >= 50 ? colors.success : colors.error}
+                  />
                 </View>
               </View>
             </View>
@@ -106,22 +115,35 @@ export default function ResultsScreen({ navigation, route }) {
                 <View style={styles.resultRow}>
                   <View style={styles.resultLeft}>
                     <Text style={styles.questionNumber}>Question {result.question}</Text>
-                    <View style={styles.answerRow}>
-                      <View style={styles.answerBadge}>
-                        <Text style={styles.answerLabel}>Correct</Text>
-                        <Text style={styles.answerValue}>{result.correct}</Text>
+                    {(gradingType === 'mcq' || (result.correct && result.student && result.correct.length === 1)) ? (
+                      <View style={styles.answerRow}>
+                        <View style={styles.answerBadge}>
+                          <Text style={styles.answerLabel}>Correct</Text>
+                          <Text style={styles.answerValue}>{result.correct}</Text>
+                        </View>
+                        <Text style={styles.answerSeparator}>→</Text>
+                        <View style={styles.answerBadge}>
+                          <Text style={styles.answerLabel}>Student</Text>
+                          <Text style={styles.answerValue}>{result.student}</Text>
+                        </View>
                       </View>
-                      <Text style={styles.answerSeparator}>→</Text>
-                      <View style={styles.answerBadge}>
-                        <Text style={styles.answerLabel}>Your Answer</Text>
-                        <Text style={styles.answerValue}>{result.student}</Text>
+                    ) : (
+                      <View style={styles.answerRow}>
+                        <View style={styles.answerBadge}>
+                          <Text style={styles.answerLabel}>Score</Text>
+                          <Text style={styles.answerValue}>{result.points} / {result.maxPoints || result.points}</Text>
+                        </View>
                       </View>
-                    </View>
+                    )}
                   </View>
                   <View style={styles.resultRight}>
                     {result.status === 'correct' ? (
                       <View style={styles.statusCorrect}>
                         <Text style={styles.statusText}>{result.points}</Text>
+                      </View>
+                    ) : result.status === 'partial' ? (
+                      <View style={[styles.statusCorrect, { backgroundColor: colors.warning + '20' }]}>
+                        <Text style={[styles.statusText, { color: colors.warning }]}>{result.points}</Text>
                       </View>
                     ) : (
                       <View style={styles.statusIncorrect}>
@@ -139,17 +161,13 @@ export default function ResultsScreen({ navigation, route }) {
       {/* Action Buttons */}
       <AnimatedScreen delay={180}>
         <View style={styles.actions}>
-          <Button
-            title="Review & Correct"
-            onPress={handleReview}
-            variant="outline"
-            style={styles.reviewButton}
-          />
-          <Button
-            title="Save & Next"
-            onPress={handleNext}
-            variant="primary"
-          />
+          {!isExisting && (
+            <Button
+              title="Save & Next"
+              onPress={handleNext}
+              variant="primary"
+            />
+          )}
         </View>
       </AnimatedScreen>
     </View>

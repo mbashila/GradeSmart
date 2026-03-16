@@ -103,7 +103,9 @@ export default function HistoryScreen({ navigation }) {
 
   const getScoreColor = (score) => {
     if (score >= 85) return colors.success;
-    if (score >= 70) return colors.warning;
+    if (score >= 75) return colors.info;
+    if (score >= 65) return colors.warning;
+    if (score >= 50) return colors.accent;
     return colors.error;
   };
 

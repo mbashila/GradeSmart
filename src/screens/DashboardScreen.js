@@ -11,6 +11,8 @@ import { useNotifications } from '../context/NotificationsContext';
 import { elevation } from '../theme/elevation';
 import { useScans } from '../context/ScansContext';
 import { useTests } from '../context/TestsContext';
+import { useAuth } from '../context/AuthContext';
+import { useLikes } from '../context/LikesContext';
 
 export default function DashboardScreen({ navigation }) {
   const { unreadCount } = useNotifications();
@@ -18,6 +20,15 @@ export default function DashboardScreen({ navigation }) {
   const isTablet = width >= 900;
   const { scans } = useScans();
   const { tests } = useTests();
+  const { user } = useAuth();
+  const { isLiked, toggleLike } = useLikes();
+  const displayName = React.useMemo(() => {
+    const name = user?.user_metadata?.full_name || '';
+    if (name && String(name).trim().length > 0) return name;
+    const email = user?.email || '';
+    if (email) return email.split('@')[0];
+    return 'User';
+  }, [user]);
   const scannedCount = scans.length;
   const testsCreated = tests.length;
   const gradedTestsCount = React.useMemo(() => {
@@ -33,6 +44,23 @@ export default function DashboardScreen({ navigation }) {
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
       .slice(0, 3)
   ), [scans]);
+
+  // Tests where scanned students < expected students
+  const unfinishedTests = React.useMemo(() => {
+    return tests
+      .filter((t) => {
+        const expected = parseInt(t.numberOfStudents, 10) || 0;
+        if (expected <= 0) return false;
+        const scannedForTest = scans.filter((s) => s.testId === t.id).length;
+        return scannedForTest < expected;
+      })
+      .map((t) => {
+        const expected = parseInt(t.numberOfStudents, 10) || 0;
+        const scannedForTest = scans.filter((s) => s.testId === t.id).length;
+        return { ...t, expected, scanned: scannedForTest, remaining: expected - scannedForTest };
+      })
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }, [tests, scans]);
 
   
   
@@ -51,7 +79,7 @@ export default function DashboardScreen({ navigation }) {
                   <View style={styles.heroTopRow}>
                     <View>
                       <Text style={styles.welcomeSmall}>Welcome back,</Text>
-                      <Text style={styles.welcomeName}>Sarah!</Text>
+                      <Text style={styles.welcomeName}>{displayName}</Text>
                     </View>
                     <PressableScale onPress={() => navigation.navigate('Profile')}>
                       <View style={styles.headerIconButton}>
@@ -140,7 +168,7 @@ export default function DashboardScreen({ navigation }) {
                 <View style={styles.heroTopRow}>
                   <View>
                     <Text style={styles.welcomeSmall}>Welcome back,</Text>
-                    <Text style={styles.welcomeName}>Sarah!</Text>
+                    <Text style={styles.welcomeName}>{displayName}</Text>
                   </View>
                   <PressableScale onPress={() => navigation.navigate('Profile')}>
                     <View style={styles.headerIconButton}>
@@ -219,16 +247,38 @@ export default function DashboardScreen({ navigation }) {
           </>
         )}
         
-        {/* Quick Actions */}
-        <AnimatedScreen delay={240}>
-          <View style={styles.section}>
-            <PressableScale containerStyle={styles.quickAction} onPress={() => navigation.navigate('History')} haptic={true}>
-              <Ionicons name="time-outline" size={24} color={colors.secondaryLight} />
-              <Text style={styles.quickActionText}>Continue Unfinished Scans</Text>
-              <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
-            </PressableScale>
-          </View>
-        </AnimatedScreen>
+        {/* Unfinished Scans */}
+        {unfinishedTests.length > 0 && (
+          <AnimatedScreen delay={240}>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Continue Unfinished Scans</Text>
+              {unfinishedTests.map((t) => (
+                <PressableScale
+                  key={t.id}
+                  containerStyle={styles.unfinishedCard}
+                  onPress={() => navigation.navigate('Scan', { testData: t })}
+                  haptic={true}
+                >
+                  <View style={styles.unfinishedHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.unfinishedName}>{t.testName || t.title || t.name || 'Test'}</Text>
+                      <Text style={styles.unfinishedMeta}>{t.subject} • {t.classRoom || t.grade}</Text>
+                    </View>
+                    <View style={styles.unfinishedBadge}>
+                      <Text style={styles.unfinishedBadgeText}>{t.remaining} left</Text>
+                    </View>
+                  </View>
+                  <View style={styles.unfinishedProgress}>
+                    <View style={styles.progressBarBg}>
+                      <View style={[styles.progressBarFill, { width: `${Math.round((t.scanned / t.expected) * 100)}%` }]} />
+                    </View>
+                    <Text style={styles.unfinishedCount}>{t.scanned}/{t.expected} scanned</Text>
+                  </View>
+                </PressableScale>
+              ))}
+            </View>
+          </AnimatedScreen>
+        )}
         <AnimatedScreen delay={300}>
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Recent Scans</Text>
@@ -262,6 +312,9 @@ export default function DashboardScreen({ navigation }) {
                       <Ionicons name="document-text-outline" size={16} color={colors.textSecondary} />
                       <Text style={styles.testCardStatText}>{scan.pages || (scan.images ? scan.images.length : 0)} pages</Text>
                     </View>
+                    <PressableScale onPress={() => toggleLike(scan.id)}>
+                      <Ionicons name={isLiked(scan.id) ? 'heart' : 'heart-outline'} size={20} color={isLiked(scan.id) ? colors.error : colors.textLight} />
+                    </PressableScale>
                     <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
                   </View>
                 </Card>
@@ -577,6 +630,64 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginLeft: 12,
     flex: 1,
+  },
+  unfinishedCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.secondary,
+  },
+  unfinishedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  unfinishedName: {
+    ...typography.h4,
+    color: colors.text,
+  },
+  unfinishedMeta: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  unfinishedBadge: {
+    backgroundColor: colors.secondaryLight + '20',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  unfinishedBadgeText: {
+    ...typography.bodySmall,
+    color: colors.secondary,
+    fontWeight: '700',
+  },
+  unfinishedProgress: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  progressBarBg: {
+    flex: 1,
+    height: 6,
+    backgroundColor: colors.border,
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginRight: 10,
+  },
+  progressBarFill: {
+    height: 6,
+    backgroundColor: colors.secondary,
+    borderRadius: 3,
+  },
+  unfinishedCount: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    fontWeight: '600',
+    minWidth: 70,
+    textAlign: 'right',
   },
   recentGrid: {
     flexDirection: 'row',

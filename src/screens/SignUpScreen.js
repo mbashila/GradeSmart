@@ -6,16 +6,39 @@ import Logo from '../components/Logo';
 import AnimatedScreen from '../components/AnimatedScreen';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../components/Toast';
 
 export default function SignUpScreen({ navigation }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const { signUp, isConfigured } = useAuth();
+  const { showToast } = useToast();
   
   const handleSignUp = () => {
-    // In a real app, this would create a new account
-    navigation.navigate('Dashboard');
+    if (!isConfigured) {
+      showToast('Supabase not configured. Add your credentials to app.json extra.', 'error');
+      return;
+    }
+    if (!email || !password || !confirmPassword) {
+      showToast('Fill in all required fields', 'error');
+      return;
+    }
+    if (password !== confirmPassword) {
+      showToast('Passwords do not match', 'error');
+      return;
+    }
+    (async () => {
+      const { data, error } = await signUp({ email, password, name });
+      if (error) {
+        showToast(error.message || 'Sign-up failed', 'error');
+        return;
+      }
+      showToast('Account created. Please check your email to confirm (if required).', 'success');
+      navigation.navigate('Login');
+    })();
   };
   
   return (

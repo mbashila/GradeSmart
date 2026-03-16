@@ -15,19 +15,27 @@ export default function ScanConfirmationScreen({ navigation, route }) {
     if (imagesParam && Array.isArray(imagesParam) && imagesParam.length > 0) return imagesParam;
     return imageUri ? [imageUri] : [];
   }, [imagesParam, imageUri]);
-  const [detectedScore] = React.useState('32');
-  const [detectedPercentage] = React.useState('80%');
   const [studentName, setStudentName] = React.useState(route?.params?.studentName || '');
-  
+  const questionType = testData?.questionType || 'essay';
+
+  const getGradingScreen = () => {
+    switch (questionType) {
+      case 'multiple-choice':
+        return 'MCQAnswerInput';
+      case 'mixed':
+        return 'MixedScoring';
+      case 'essay':
+      default:
+        return 'EssayScoring';
+    }
+  };
+
   const handleConfirm = () => {
-    // Process the scan and navigate to results
-    navigation.navigate('Results', {
-      imageUri: images[0],
+    const screen = getGradingScreen();
+    navigation.navigate(screen, {
       images,
       testData,
       studentName: studentName || 'Student',
-      score: detectedScore,
-      percentage: detectedPercentage,
     });
   };
   
@@ -73,17 +81,9 @@ export default function ScanConfirmationScreen({ navigation, route }) {
                 style={styles.scannedImage}
                 resizeMode="contain"
               />
-              
-              {/* Detected Score Overlay */}
-              <View style={styles.scoreOverlay}>
-                <View style={styles.scoreBadge}>
-                  <Text style={styles.scoreText}>{detectedScore}</Text>
-                  <Text style={styles.percentageText}>{detectedPercentage}</Text>
-                </View>
-              </View>
             </Card>
             
-            {/* Detection Summary */}
+            {/* Scan Summary */}
             <Card style={styles.summaryCard}>
               <View style={styles.summaryHeader}>
                 <Ionicons name="checkmark-circle" size={24} color={colors.success} />
@@ -101,30 +101,38 @@ export default function ScanConfirmationScreen({ navigation, route }) {
               </View>
               
               <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Detected Score:</Text>
-                <Text style={styles.summaryValue}>{detectedScore} / {testData?.totalPoints || 100}</Text>
-              </View>
-              
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Percentage:</Text>
-                <Text style={[styles.summaryValue, styles.percentageValue]}>
-                  {detectedPercentage}
+                <Text style={styles.summaryLabel}>Question Type:</Text>
+                <Text style={styles.summaryValue}>
+                  {questionType === 'multiple-choice' ? 'Multiple Choice'
+                    : questionType === 'mixed' ? 'Mixed'
+                    : 'Essay / Handwriting'}
                 </Text>
               </View>
               
               <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Questions Detected:</Text>
+                <Text style={styles.summaryLabel}>Questions:</Text>
                 <Text style={styles.summaryValue}>
-                  {testData?.numberOfQuestions || 12} / {testData?.numberOfQuestions || 12}
+                  {testData?.numberOfQuestions || '—'}
+                </Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Total Points:</Text>
+                <Text style={styles.summaryValue}>
+                  {testData?.totalPoints || '—'}
                 </Text>
               </View>
             </Card>
             
-            {/* Warning if needed */}
+            {/* Info card */}
             <View style={styles.warningCard}>
-              <Ionicons name="warning" size={20} color={colors.warning} />
+              <Ionicons name="information-circle" size={20} color={colors.info} />
               <Text style={styles.warningText}>
-                Please verify the detected answers are correct before confirming
+                {questionType === 'multiple-choice'
+                  ? 'Next: Enter the student\'s answers to grade against the marking key.'
+                  : questionType === 'mixed'
+                  ? 'Next: Enter MCQ answers and score essay questions.'
+                  : 'Next: Score each written answer manually.'}
               </Text>
             </View>
           </View>
@@ -139,7 +147,7 @@ export default function ScanConfirmationScreen({ navigation, route }) {
               style={styles.retakeButton}
             />
             <Button
-              title="Confirm & Grade"
+              title={questionType === 'multiple-choice' ? 'Enter Answers' : questionType === 'mixed' ? 'Start Grading' : 'Score Answers'}
               onPress={handleConfirm}
               variant="primary"
             />
@@ -193,28 +201,6 @@ const styles = StyleSheet.create({
     height: 400,
     backgroundColor: colors.surface,
   },
-  scoreOverlay: {
-    position: 'absolute',
-    top: 20,
-    right: 20,
-  },
-  scoreBadge: {
-    backgroundColor: colors.error,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  scoreText: {
-    ...typography.h2,
-    color: colors.background,
-    fontWeight: '700',
-  },
-  percentageText: {
-    ...typography.body,
-    color: colors.background,
-    marginTop: 4,
-  },
   summaryCard: {
     marginBottom: 16,
   },
@@ -242,10 +228,6 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.text,
     fontWeight: '600',
-  },
-  percentageValue: {
-    color: colors.secondary,
-    fontSize: 18,
   },
   warningCard: {
     flexDirection: 'row',

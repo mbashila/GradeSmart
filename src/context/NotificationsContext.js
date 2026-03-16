@@ -3,6 +3,7 @@ import React, { createContext, useContext, useMemo, useState, useCallback } from
 const NotificationsContext = createContext({
   notifications: [],
   setNotifications: () => {},
+  addNotification: () => {},
   unreadCount: 0,
   markAllRead: () => {},
   toggleRead: () => {},
@@ -26,13 +27,24 @@ export function NotificationsProvider({ children }) {
     setNotifications(prev => prev.map(n => (n.id === id ? { ...n, read: !n.read } : n)));
   }, []);
 
+  const addNotification = useCallback((notification) => {
+    const newNotif = {
+      id: Date.now().toString(),
+      time: 'Just now',
+      read: false,
+      ...notification,
+    };
+    setNotifications(prev => [newNotif, ...prev.slice(0, 49)]); // Keep max 50
+  }, []);
+
   const value = useMemo(() => ({
     notifications,
     setNotifications,
+    addNotification,
     unreadCount,
     markAllRead,
     toggleRead,
-  }), [notifications, unreadCount, markAllRead, toggleRead]);
+  }), [notifications, unreadCount, markAllRead, toggleRead, addNotification]);
 
   return (
     <NotificationsContext.Provider value={value}>
