@@ -43,7 +43,6 @@ GradeSmart/
 │   └── README.md
 └── src/
     ├── components/            # Reusable UI components (Button, Card, Input, etc.)
-    ├── context/               # App providers and state contexts
     ├── screens/               # UI screens (Scan, Results, History, etc.)
     ├── lib/                   # Supabase client and helpers
     ├── theme/                 # Color palette and typography styles
@@ -52,13 +51,7 @@ GradeSmart/
 
 ## Getting Started
 
-### Prerequisites
-
-- Node.js (recommended v16+)
-- npm or yarn
-- Expo CLI (`npm install -g expo-cli`)
-- Expo Go (iOS/Android)
-- Optional: Python 3.9+, Tesseract OCR (for backend image pipelines)
+sseract OCR (for backend image pipelines)
 
 ### Mobile Setup (Expo)
 
@@ -87,26 +80,11 @@ npm run web
 1. `cd backend`
 2. Install Python dependencies:
 
-```bash
-pip install -r requirements.txt
-```
-
 3. Run the API:
 
 ```bash
 python server.py
 ```
-
-or
-
-```bash
-uvicorn backend.server:app --host 0.0.0.0 --port 8100 --reload
-```
-
-4. Validate:
-
-- `http://localhost:8100/health`
-- `http://localhost:8100/docs`
 
 ## Supabase Configuration
 
@@ -136,13 +114,6 @@ The app handles token persistence via `expo-secure-store` and chunking for large
 - `/grade-mcq` - full MCQ pipeline + scoring
 - `/grade-written` - written pipeline + OCR
 - `/grade-full` - mixed MCQ + written grading
-
-## Enhancement Ideas
-
-- multi-language and dark mode
-- PDF/CSV export
-- richer analytics and class-level dashboards
-- real-time progress streaming during scanning
 
 ## License
 
