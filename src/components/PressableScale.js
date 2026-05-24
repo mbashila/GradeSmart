@@ -5,6 +5,7 @@ import { useHaptics } from '../context/HapticsContext';
 export default function PressableScale({
   children,
   onPress,
+  onLongPress,
   disabled = false,
   containerStyle,
   hitSlop = { top: 8, bottom: 8, left: 8, right: 8 },
@@ -36,6 +37,7 @@ export default function PressableScale({
   return (
     <Pressable
       onPress={handlePress}
+      onLongPress={onLongPress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       disabled={disabled}

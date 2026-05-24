@@ -13,13 +13,15 @@ import Header from "../components/Header";
 import Card from "../components/Card";
 import Skeleton, { SkeletonCircle } from "../components/Skeleton";
 import AnimatedScreen from "../components/AnimatedScreen";
-import { colors } from "../theme/colors";
+import { useColors } from '../context/ThemeContext';
 import { typography } from "../theme/typography";
 import { useTests } from "../context/TestsContext";
 import { useScans } from "../context/ScansContext";
 import storage from "../utils/storage";
 
 export default function HistoryScreen({ navigation }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const [selectedFilter, setSelectedFilter] = useState("all"); // 'all', 'recent', 'by-subject'
   const [loading, setLoading] = useState(true);
   const { tests } = useTests();
@@ -314,7 +316,7 @@ export default function HistoryScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.surfaceLight,

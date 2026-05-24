@@ -1,34 +1,48 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, useWindowDimensions, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, useWindowDimensions, Platform, Alert, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
 import PressableScale from '../components/PressableScale';
-import { colors } from '../theme/colors';
+import { Skeleton } from '../components/Skeleton';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useNotifications } from '../context/NotificationsContext';
 import { elevation } from '../theme/elevation';
-import { useScans } from '../context/ScansContext';
+import { useScans, GUEST_TEST_LIMIT } from '../context/ScansContext';
 import { useTests } from '../context/TestsContext';
 import { useAuth } from '../context/AuthContext';
 import { useLikes } from '../context/LikesContext';
+import useDeviceSession from '../hooks/useDeviceSession';
 
 export default function DashboardScreen({ navigation }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { unreadCount } = useNotifications();
   const { width } = useWindowDimensions();
   const isTablet = width >= 900;
-  const { scans } = useScans();
-  const { tests } = useTests();
-  const { user } = useAuth();
+  const { scans, syncing: scansSyncing, guestTestsRemaining } = useScans();
+  const { tests, deleteTest, syncing: testsSyncing } = useTests();
+  const { user, isGuest, signOut } = useAuth();
   const { isLiked, toggleLike } = useLikes();
+
+  // Single-device session enforcement
+  useDeviceSession(
+    isGuest ? null : user?.id,
+    () => signOut() // force logout callback
+  );
+  const loading = scansSyncing || testsSyncing;
   const displayName = React.useMemo(() => {
+    if (isGuest) return 'Guest';
     const name = user?.user_metadata?.full_name || '';
-    if (name && String(name).trim().length > 0) return name;
+    if (name && String(name).trim().length > 0) {
+      return String(name).trim().split(/\s+/)[0];
+    }
     const email = user?.email || '';
     if (email) return email.split('@')[0];
     return 'User';
-  }, [user]);
+  }, [user, isGuest]);
   const scannedCount = scans.length;
   const testsCreated = tests.length;
   const gradedTestsCount = React.useMemo(() => {
@@ -181,29 +195,51 @@ export default function DashboardScreen({ navigation }) {
                     </View>
                   </PressableScale>
                 </View>
-                <View style={styles.statsRow}>
-                  <View style={styles.statCard}>
-                    <View style={styles.statIconWrap}>
-                      <Ionicons name="albums-outline" size={20} color={colors.secondary} />
-                    </View>
-                    <Text style={styles.statValue}>{testsCreated}</Text>
-                    <Text style={styles.statLabel}>Tests</Text>
+                {/* Guest scan limit banner */}
+                {isGuest && (
+                  <View style={styles.guestBanner}>
+                    <Ionicons name="information-circle" size={18} color={colors.secondary} />
+                    <Text style={styles.guestBannerText}>
+                      Guest mode: {guestTestsRemaining} of {GUEST_TEST_LIMIT} tests remaining
+                    </Text>
                   </View>
-                  <View style={styles.statCard}>
-                    <View style={styles.statIconWrap}>
-                      <Ionicons name="document-text-outline" size={20} color={colors.secondary} />
-                    </View>
-                    <Text style={styles.statValue}>{gradedTestsCount}</Text>
-                    <Text style={styles.statLabel}>Graded Tests</Text>
+                )}
+
+                {loading ? (
+                  <View style={styles.statsRow}>
+                    {[1, 2, 3].map((i) => (
+                      <View key={i} style={styles.statCard}>
+                        <Skeleton width={32} height={32} radius={16} style={{ marginBottom: 6 }} />
+                        <Skeleton width={30} height={20} style={{ marginBottom: 4 }} />
+                        <Skeleton width={50} height={12} />
+                      </View>
+                    ))}
                   </View>
-                  <View style={styles.statCard}>
-                    <View style={styles.statIconWrap}>
-                      <Ionicons name="scan-outline" size={20} color={colors.secondary} />
+                ) : (
+                  <View style={styles.statsRow}>
+                    <View style={styles.statCard}>
+                      <View style={styles.statIconWrap}>
+                        <Ionicons name="albums-outline" size={20} color={colors.secondary} />
+                      </View>
+                      <Text style={styles.statValue}>{testsCreated}</Text>
+                      <Text style={styles.statLabel}>Tests</Text>
                     </View>
-                    <Text style={styles.statValue}>{scannedCount}</Text>
-                    <Text style={styles.statLabel}>Scans</Text>
+                    <View style={styles.statCard}>
+                      <View style={styles.statIconWrap}>
+                        <Ionicons name="document-text-outline" size={20} color={colors.secondary} />
+                      </View>
+                      <Text style={styles.statValue}>{gradedTestsCount}</Text>
+                      <Text style={styles.statLabel}>Graded Tests</Text>
+                    </View>
+                    <View style={styles.statCard}>
+                      <View style={styles.statIconWrap}>
+                        <Ionicons name="scan-outline" size={20} color={colors.secondary} />
+                      </View>
+                      <Text style={styles.statValue}>{scannedCount}</Text>
+                      <Text style={styles.statLabel}>Scans</Text>
+                    </View>
                   </View>
-                </View>
+                )}
               </View>
             </AnimatedScreen>
             <AnimatedScreen delay={120}>
@@ -252,11 +288,30 @@ export default function DashboardScreen({ navigation }) {
           <AnimatedScreen delay={240}>
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Continue Unfinished Scans</Text>
+              <Text style={styles.sectionHint}>Long press to delete a test</Text>
               {unfinishedTests.map((t) => (
                 <PressableScale
                   key={t.id}
                   containerStyle={styles.unfinishedCard}
                   onPress={() => navigation.navigate('Scan', { testData: t })}
+                  onLongPress={() => {
+                    const testName = t.testName || t.title || t.name || 'Test';
+                    const hasScans = t.scanned > 0;
+                    Alert.alert(
+                      'Delete Test',
+                      hasScans
+                        ? `Delete "${testName}"?\n\nThe ${t.scanned} scan(s) already completed will be kept in Recent Scans.`
+                        : `Delete "${testName}"?\n\nThis test has no scans yet and will be permanently removed.`,
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Delete',
+                          style: 'destructive',
+                          onPress: () => deleteTest(t.id),
+                        },
+                      ]
+                    );
+                  }}
                   haptic={true}
                 >
                   <View style={styles.unfinishedHeader}>
@@ -282,7 +337,22 @@ export default function DashboardScreen({ navigation }) {
         <AnimatedScreen delay={300}>
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Recent Scans</Text>
-            {recentScansList.length === 0 ? (
+            {loading ? (
+              [1, 2].map((i) => (
+                <Card key={i} style={styles.testCard}>
+                  <View style={styles.testCardHeader}>
+                    <View style={styles.testCardInfo}>
+                      <Skeleton width={'60%'} height={16} style={{ marginBottom: 6 }} />
+                      <Skeleton width={'40%'} height={12} />
+                    </View>
+                  </View>
+                  <View style={styles.testCardFooter}>
+                    <Skeleton width={80} height={14} />
+                    <Skeleton width={20} height={20} radius={10} />
+                  </View>
+                </Card>
+              ))
+            ) : recentScansList.length === 0 ? (
               <Card style={[styles.testCard, { alignItems: 'center' }] }>
                 <Ionicons name="scan-outline" size={40} color={colors.secondary} />
                 <Text style={[typography.h4, { color: colors.text, marginTop: 8 }]}>No scans yet</Text>
@@ -322,12 +392,28 @@ export default function DashboardScreen({ navigation }) {
             )}
           </View>
         </AnimatedScreen>
+
+        {isGuest && (
+          <AnimatedScreen delay={360}>
+            <TouchableOpacity
+              style={styles.exitGuestBtn}
+              onPress={() => {
+                signOut();
+                navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
+              }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="log-out-outline" size={20} color={colors.error} />
+              <Text style={styles.exitGuestText}>Exit Guest Mode</Text>
+            </TouchableOpacity>
+          </AnimatedScreen>
+        )}
       </ScrollView>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.surfaceLight,
@@ -567,6 +653,28 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginBottom: 16,
   },
+  sectionHint: {
+    ...typography.caption,
+    color: colors.textLight,
+    marginTop: -10,
+    marginBottom: 12,
+  },
+  guestBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.secondary + '12',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 14,
+    gap: 8,
+  },
+  guestBannerText: {
+    ...typography.bodySmall,
+    color: colors.secondary,
+    fontWeight: '600',
+    flex: 1,
+  },
   testCard: {
     marginBottom: 12,
     borderRadius: 20,
@@ -713,5 +821,21 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: colors.background,
     fontWeight: '700',
+  },
+  exitGuestBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    marginHorizontal: 24,
+    marginBottom: 32,
+    borderRadius: 14,
+    backgroundColor: colors.error + '12',
+    gap: 8,
+  },
+  exitGuestText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.error,
   },
 });

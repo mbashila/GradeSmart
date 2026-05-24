@@ -2,6 +2,7 @@
   "expo": {
     "name": "GradeSmart",
     "slug": "gradesmart",
+    "scheme": "gradesmart",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -29,6 +30,8 @@
       },
       "package": "com.gradesmart.app",
       "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE"
@@ -44,7 +47,8 @@
           "cameraPermission": "Allow GradeSmart to access your camera to scan exam papers."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-font"
     ]
   }
 }

@@ -1,10 +1,4 @@
-let AsyncStorage = null;
-try {
-  const req = eval('require');
-  AsyncStorage = req('@react-native-async-storage/async-storage').default;
-} catch (e) {
-  AsyncStorage = null;
-}
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const isAvailable = !!AsyncStorage;
 

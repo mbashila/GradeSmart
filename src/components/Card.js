@@ -1,10 +1,12 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { elevation } from '../theme/elevation';
 import PressableScale from './PressableScale';
 
 export default function Card({ children, style, onPress, ...props }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   if (onPress) {
     return (
       <PressableScale onPress={onPress} containerStyle={[styles.card, style]} haptic={true} {...props}>
@@ -20,7 +22,7 @@ export default function Card({ children, style, onPress, ...props }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   card: {
     backgroundColor: colors.surface,
     borderRadius: 16,

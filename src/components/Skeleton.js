@@ -1,8 +1,9 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, StyleSheet, View } from 'react-native';
-import { colors } from '../theme/colors';
+import { Animated, View } from 'react-native';
+import { useColors } from '../context/ThemeContext';
 
 export function Skeleton({ width = '100%', height = 16, radius = 8, style }) {
+  const colors = useColors();
   const opacity = useRef(new Animated.Value(0.6)).current;
 
   useEffect(() => {
@@ -19,7 +20,7 @@ export function Skeleton({ width = '100%', height = 16, radius = 8, style }) {
   return (
     <Animated.View
       style={[
-        styles.skeleton,
+        { backgroundColor: colors.border },
         { width, height, borderRadius: radius, opacity },
         style,
       ]}
@@ -41,10 +42,5 @@ export function SkeletonRow({ items = [], spacing = 12, style }) {
   );
 }
 
-const styles = StyleSheet.create({
-  skeleton: {
-    backgroundColor: colors.border,
-  },
-});
 
 export default Skeleton;

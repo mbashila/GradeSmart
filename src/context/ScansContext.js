@@ -3,26 +3,48 @@ import storage from '../utils/storage';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAuth } from './AuthContext';
 
+const GUEST_TEST_LIMIT = 1;
+const DEVICE_GUEST_COUNT_KEY = '@gradesmart:device_guest_test_count';
+
 const ScansContext = createContext({
   scans: [],
   addScan: () => {},
   deleteScan: () => {},
   syncing: false,
+  guestTestsRemaining: GUEST_TEST_LIMIT,
 });
+
+export { GUEST_TEST_LIMIT };
 
 export function ScansProvider({ children }) {
   const [scans, setScans] = useState([]);
   const [hydrated, setHydrated] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const { user } = useAuth();
+  const { user, isGuest } = useAuth();
+
+  const STORAGE_KEY = isGuest ? '@gradesmart:scans:guest' : '@gradesmart:scans';
+  const [deviceGuestCount, setDeviceGuestCount] = useState(0);
+  const guestTestsRemaining = isGuest ? Math.max(0, GUEST_TEST_LIMIT - deviceGuestCount) : -1;
+
+  // Load device-persistent guest test count on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await storage.getItem(DEVICE_GUEST_COUNT_KEY);
+        if (raw) setDeviceGuestCount(parseInt(raw, 10) || 0);
+      } catch {}
+    })();
+  }, []);
 
   // Hydrate: local cache first, then Supabase
   useEffect(() => {
     let mounted = true;
+    setScans([]);
+    setHydrated(false);
     (async () => {
       // Load local cache for instant display
       try {
-        const raw = await storage.getItem('@gradesmart:scans');
+        const raw = await storage.getItem(STORAGE_KEY);
         if (mounted && raw) {
           try {
             const parsed = JSON.parse(raw);
@@ -31,8 +53,8 @@ export function ScansProvider({ children }) {
         }
       } catch {}
 
-      // Sync from Supabase
-      if (isSupabaseConfigured && user?.id) {
+      // Sync from Supabase (not for guests)
+      if (!isGuest && isSupabaseConfigured && user?.id) {
         try {
           setSyncing(true);
           const { data, error } = await supabase
@@ -62,22 +84,34 @@ export function ScansProvider({ children }) {
       if (mounted) setHydrated(true);
     })();
     return () => { mounted = false; };
-  }, [user?.id]);
+  }, [user?.id, isGuest]);
 
   // Persist to local cache
   useEffect(() => {
     if (!hydrated) return;
-    storage.setItem('@gradesmart:scans', JSON.stringify(scans));
-  }, [scans, hydrated]);
+    storage.setItem(STORAGE_KEY, JSON.stringify(scans));
+  }, [scans, hydrated, STORAGE_KEY]);
 
   const addScan = useCallback(async (scan) => {
+    // Enforce device-persistent guest test limit
+    if (isGuest && deviceGuestCount >= GUEST_TEST_LIMIT) {
+      return { error: `Guest accounts are limited to ${GUEST_TEST_LIMIT} tests per device. Sign up for unlimited access!` };
+    }
+
     const id = scan?.id || Date.now().toString();
     const createdAt = scan?.createdAt || new Date().toISOString();
     const normalized = { id, createdAt, ...scan };
     setScans((prev) => [...prev, normalized]);
 
-    // Sync to Supabase
-    if (isSupabaseConfigured && user?.id) {
+    // Increment device-persistent guest count
+    if (isGuest) {
+      const newCount = deviceGuestCount + 1;
+      setDeviceGuestCount(newCount);
+      storage.setItem(DEVICE_GUEST_COUNT_KEY, String(newCount));
+    }
+
+    // Sync to Supabase (not for guests)
+    if (!isGuest && isSupabaseConfigured && user?.id) {
       try {
         const { testId, studentName, score, maxScore, percentage, ...rest } = normalized;
         await supabase.from('scans').upsert({
@@ -100,19 +134,20 @@ export function ScansProvider({ children }) {
         });
       } catch {}
     }
-  }, [user]);
+    return { error: null };
+  }, [user, isGuest, scans.length]);
 
   const deleteScan = useCallback(async (id) => {
     setScans((prev) => prev.filter((s) => s.id !== id));
 
-    if (isSupabaseConfigured && user?.id) {
+    if (!isGuest && isSupabaseConfigured && user?.id) {
       try {
         await supabase.from('scans').delete().eq('id', id).eq('user_id', user.id);
       } catch {}
     }
-  }, [user]);
+  }, [user, isGuest]);
 
-  const value = useMemo(() => ({ scans, addScan, deleteScan, syncing }), [scans, addScan, deleteScan, syncing]);
+  const value = useMemo(() => ({ scans, addScan, deleteScan, syncing, guestTestsRemaining }), [scans, addScan, deleteScan, syncing, guestTestsRemaining]);
 
   return (
     <ScansContext.Provider value={value}>

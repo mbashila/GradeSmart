@@ -1,28 +1,27 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, Alert, TextInput, ActivityIndicator, TouchableOpacity, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Header from '../components/Header';
-import Card from '../components/Card';
-import Button from '../components/Button';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { colors } from '../theme/colors';
-import { typography } from '../theme/typography';
-import { useNotifications } from '../context/NotificationsContext';
+import { Skeleton } from '../components/Skeleton';
+import { useColors, useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useSubscription } from '../context/SubscriptionContext';
+import { useTranslation } from 'react-i18next';
+import { LANGUAGES } from '../i18n';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 export default function ProfileScreen({ navigation }) {
-  const { unreadCount } = useNotifications();
-  const { user, signOut, updateProfile, changePassword } = useAuth();
+  const colors = useColors();
+  const { isDark, toggleTheme, colorTheme } = useTheme();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
+  const { user, signOut, changePassword, deleteAccount, isGuest, isAdmin } = useAuth();
+  const { isPro, planLabel } = useSubscription();
+  const { i18n } = useTranslation();
   const [uploading, setUploading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [avatarUrl, setAvatarUrl] = React.useState(user?.user_metadata?.avatar_url || null);
+  const [avatarKey, setAvatarKey] = React.useState(Date.now());
 
-  // Editable fields
-  const [editingName, setEditingName] = React.useState(false);
-  const [editingSchool, setEditingSchool] = React.useState(false);
-  const [nameDraft, setNameDraft] = React.useState('');
-  const [schoolDraft, setSchoolDraft] = React.useState('');
   const [showPasswordModal, setShowPasswordModal] = React.useState(false);
   const [newPassword, setNewPassword] = React.useState('');
   const [confirmPassword, setConfirmPassword] = React.useState('');
@@ -40,7 +39,11 @@ export default function ProfileScreen({ navigation }) {
   }, [user]);
 
   React.useEffect(() => {
-    setAvatarUrl(user?.user_metadata?.avatar_url || null);
+    const newUrl = user?.user_metadata?.avatar_url || null;
+    if (newUrl !== avatarUrl) {
+      setAvatarUrl(newUrl);
+      setAvatarKey(Date.now());
+    }
   }, [user]);
 
   const handleSignOut = async () => {
@@ -48,28 +51,94 @@ export default function ProfileScreen({ navigation }) {
     navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
   };
 
-  const handleSaveName = async () => {
-    if (!nameDraft.trim()) { setEditingName(false); return; }
-    setSaving(true);
-    const { error } = await updateProfile({ fullName: nameDraft.trim() });
-    setSaving(false);
-    if (error) {
-      Alert.alert('Error', error.message || 'Could not update name.');
-    } else {
-      setEditingName(false);
-    }
+  const profileLoading = !isGuest && !user;
+
+  const renderSkeletonProfile = () => (
+    <>
+      <View style={styles.sectionCard}>
+        <Skeleton width={'30%'} height={16} style={{ marginBottom: 16 }} />
+        <View style={[styles.settingRow, styles.settingRowBorder]}>
+          <Skeleton width={50} height={14} />
+          <Skeleton width={'55%'} height={14} />
+        </View>
+        <View style={[styles.settingRow, styles.settingRowBorder]}>
+          <Skeleton width={40} height={14} />
+          <Skeleton width={'45%'} height={14} />
+        </View>
+        <View style={styles.settingRow}>
+          <Skeleton width={50} height={14} />
+          <Skeleton width={'40%'} height={14} />
+        </View>
+      </View>
+    </>
+  );
+
+  const renderGuestProfile = () => (
+    <>
+      <View style={styles.sectionCard}>
+        <Text style={styles.sectionTitle}>Support</Text>
+        <View style={[styles.settingRow, styles.settingRowBorder]}>
+          <View style={styles.settingLeft}>
+            <Ionicons name="help-circle-outline" size={20} color={colors.textSecondary} />
+            <Text style={styles.settingLabel}>Help Center</Text>
+          </View>
+          <Text style={styles.settingValue}>Browse FAQs</Text>
+        </View>
+        <View style={[styles.settingRow, styles.settingRowBorder]}>
+          <View style={styles.settingLeft}>
+            <Ionicons name="mail-outline" size={20} color={colors.textSecondary} />
+            <Text style={styles.settingLabel}>Contact Support</Text>
+          </View>
+          <Text style={styles.settingValue}>support@gradesmart.app</Text>
+        </View>
+        <View style={styles.settingRow}>
+          <View style={styles.settingLeft}>
+            <Ionicons name="information-circle-outline" size={20} color={colors.textSecondary} />
+            <Text style={styles.settingLabel}>App Version</Text>
+          </View>
+          <Text style={styles.settingValue}>v1.0.0</Text>
+        </View>
+      </View>
+    </>
+  );
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete Account',
+      'This will permanently delete your account and all your data (tests, scans, grades). This action cannot be undone.\n\nAre you sure?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete My Account',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Final Confirmation',
+              'Type "DELETE" in your mind and tap confirm. All data will be erased permanently.',
+              [
+                { text: 'Go Back', style: 'cancel' },
+                {
+                  text: 'Confirm Delete',
+                  style: 'destructive',
+                  onPress: async () => {
+                    setSaving(true);
+                    const { error } = await deleteAccount();
+                    setSaving(false);
+                    if (error) {
+                      Alert.alert('Error', error.message || 'Could not delete account.');
+                    } else {
+                      navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
+                    }
+                  },
+                },
+              ]
+            );
+          },
+        },
+      ]
+    );
   };
 
-  const handleSaveSchool = async () => {
-    setSaving(true);
-    const { error } = await updateProfile({ school: schoolDraft.trim() });
-    setSaving(false);
-    if (error) {
-      Alert.alert('Error', error.message || 'Could not update school.');
-    } else {
-      setEditingSchool(false);
-    }
-  };
 
   const handleChangePassword = async () => {
     if (newPassword.length < 6) {
@@ -116,47 +185,68 @@ export default function ProfileScreen({ navigation }) {
       const asset = result.assets?.[0];
       if (!asset?.uri) return;
       const ext = (asset.fileName?.split('.').pop() || asset.uri.split('.').pop() || 'jpg').toLowerCase();
+      const mimeType = asset.mimeType || `image/${ext === 'jpg' ? 'jpeg' : ext}`;
       const path = `${user.id}/${Date.now()}.${ext}`;
-      const res = await fetch(asset.uri);
-      const blob = await res.blob();
-      const { error: upErr } = await supabase.storage.from('avatars').upload(path, blob, {
+
+      // Read the file as arraybuffer for reliable RN upload
+      const response = await fetch(asset.uri);
+      const arrayBuffer = await response.arrayBuffer();
+
+      const { error: upErr } = await supabase.storage.from('avatars').upload(path, arrayBuffer, {
         cacheControl: '3600',
         upsert: true,
-        contentType: asset.mimeType || `image/${ext}`,
+        contentType: mimeType,
       });
       if (upErr) {
+        console.log('Avatar upload error:', upErr);
         Alert.alert('Upload failed', upErr.message || 'Could not upload avatar.');
         return;
       }
       const { data: pub } = supabase.storage.from('avatars').getPublicUrl(path);
       const publicUrl = pub?.publicUrl;
+      console.log('Avatar public URL:', publicUrl);
       if (publicUrl) {
         const { error: updErr } = await supabase.auth.updateUser({ data: { avatar_url: publicUrl } });
         if (updErr) {
+          console.log('Avatar metadata update error:', updErr);
           Alert.alert('Update failed', updErr.message || 'Could not update profile.');
           return;
         }
         setAvatarUrl(publicUrl);
-        await supabase.from('activities').insert({ user_id: user.id, type: 'avatar_uploaded', meta: { path } });
-        Alert.alert('Success', 'Profile picture updated');
+        setAvatarKey(Date.now());
+        // Log activity (non-blocking)
+        supabase.from('activities').insert({ user_id: user.id, type: 'avatar_uploaded', meta: { path } }).then(() => {});
+        Alert.alert('Success', 'Profile picture updated!');
       }
     } catch (e) {
-      Alert.alert('Error', 'Please install expo-image-picker to use this feature.');
+      console.log('Avatar upload exception:', e);
+      Alert.alert('Error', e.message || 'Could not upload profile picture. Please try again.');
     } finally {
       setUploading(false);
     }
   };
 
+  const renderSettingRow = (icon, label, rightText, onPress, isLast) => (
+    <TouchableOpacity
+      key={label}
+      style={[styles.settingRow, !isLast && styles.settingRowBorder]}
+      onPress={onPress}
+      activeOpacity={0.6}
+    >
+      <View style={styles.settingLeft}>
+        <Ionicons name={icon} size={20} color={colors.textSecondary} />
+        <Text style={styles.settingLabel}>{label}</Text>
+      </View>
+      {rightText ? (
+        <Text style={styles.settingValue}>{rightText}</Text>
+      ) : (
+        <Ionicons name="chevron-forward" size={18} color={colors.textLight} />
+      )}
+    </TouchableOpacity>
+  );
+
   return (
     <View style={styles.container}>
-      <Header 
-        title="Profile" 
-        onBack={() => navigation.goBack()} 
-        rightIcon="notifications-outline"
-        onRightPress={() => navigation.navigate('Notifications')}
-        rightBadge={unreadCount}
-      />
-
       {/* Change Password Modal */}
       <Modal visible={showPasswordModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
@@ -205,258 +295,165 @@ export default function ProfileScreen({ navigation }) {
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <AnimatedScreen>
-          <TouchableOpacity style={styles.headerSection} onPress={handleUploadAvatar} activeOpacity={0.7}>
-            {avatarUrl ? (
-              <Image
-                source={{ uri: avatarUrl + '?t=' + Date.now() }}
-                style={styles.avatar}
-                onError={() => setAvatarUrl(null)}
-              />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Ionicons name="person-circle" size={96} color={colors.secondary} />
-              </View>
-            )}
-            <View style={styles.avatarBadge}>
-              <Ionicons name="camera" size={14} color="#fff" />
-            </View>
-            <Text style={styles.name}>{displayName}</Text>
-            <Text style={styles.role}>Teacher</Text>
-            {uploading && <ActivityIndicator size="small" color={colors.secondary} style={{ marginTop: 4 }} />}
+          {/* Back button */}
+          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
 
-          <Card style={styles.card}>
-            <Text style={styles.sectionTitle}>Account</Text>
-            <View style={styles.row}>
-              <Text style={styles.label}>Email</Text>
-              <Text style={styles.value}>{user?.email || '-'}</Text>
-            </View>
-
-            {/* Editable Name */}
-            <View style={styles.row}>
-              <Text style={styles.label}>Name</Text>
-              {editingName ? (
-                <View style={styles.editRow}>
-                  <TextInput
-                    style={styles.editInput}
-                    value={nameDraft}
-                    onChangeText={setNameDraft}
-                    placeholder="Your name"
-                    placeholderTextColor={colors.textLight}
-                    autoFocus
-                    returnKeyType="done"
-                    onSubmitEditing={handleSaveName}
-                  />
-                  <TouchableOpacity onPress={handleSaveName} disabled={saving}>
-                    {saving ? (
-                      <ActivityIndicator size="small" color={colors.secondary} />
+          {/* Profile Header — centered avatar, name, email, edit button */}
+          <View style={styles.headerSection}>
+            {isGuest ? (
+              <>
+                <View style={styles.avatarWrapper}>
+                  <Ionicons name="person-circle" size={100} color={colors.textLight} />
+                </View>
+                <Text style={styles.name}>Guest User</Text>
+                <Text style={styles.email}>Limited access • 3 scans</Text>
+              </>
+            ) : (
+              <>
+                <View style={styles.avatarWrapper}>
+                  <TouchableOpacity onPress={() => navigation.navigate('ProfileDetails')} activeOpacity={0.7}>
+                    {avatarUrl ? (
+                      <Image
+                        key={avatarKey}
+                        source={{ uri: `${avatarUrl}?t=${avatarKey}` }}
+                        style={styles.avatar}
+                        onError={(e) => {
+                          console.log('Avatar image load error:', e.nativeEvent?.error);
+                          setAvatarUrl(null);
+                        }}
+                      />
                     ) : (
-                      <Ionicons name="checkmark-circle" size={24} color={colors.success} />
+                      <View style={styles.avatarFallback}>
+                        <Text style={styles.avatarInitial}>
+                          {(displayName || 'U').charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
                     )}
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setEditingName(false)} style={{ marginLeft: 6 }}>
-                    <Ionicons name="close-circle" size={24} color={colors.textLight} />
+                  <TouchableOpacity style={styles.cameraBadge} onPress={handleUploadAvatar} activeOpacity={0.7}>
+                    <Ionicons name="camera" size={12} color="#fff" />
                   </TouchableOpacity>
+                  {uploading && (
+                    <View style={styles.uploadingOverlay}>
+                      <ActivityIndicator size="small" color="#fff" />
+                    </View>
+                  )}
                 </View>
-              ) : (
+                <Text style={styles.name}>{displayName}</Text>
+                <Text style={styles.email}>{user?.email || ''}</Text>
                 <TouchableOpacity
-                  style={styles.editableValue}
-                  onPress={() => { setNameDraft(user?.user_metadata?.full_name || ''); setEditingName(true); }}
+                  style={styles.editProfileBtn}
+                  onPress={() => navigation.navigate('EditProfile')}
+                  activeOpacity={0.7}
                 >
-                  <Text style={styles.value}>{displayName}</Text>
-                  <Ionicons name="pencil" size={14} color={colors.textLight} style={{ marginLeft: 6 }} />
+                  <Text style={styles.editProfileText}>Edit profile</Text>
                 </TouchableOpacity>
-              )}
-            </View>
+              </>
+            )}
+          </View>
 
-            {/* Editable School */}
-            <View style={styles.row}>
-              <Text style={styles.label}>School</Text>
-              {editingSchool ? (
-                <View style={styles.editRow}>
-                  <TextInput
-                    style={styles.editInput}
-                    value={schoolDraft}
-                    onChangeText={setSchoolDraft}
-                    placeholder="Your school"
-                    placeholderTextColor={colors.textLight}
-                    autoFocus
-                    returnKeyType="done"
-                    onSubmitEditing={handleSaveSchool}
-                  />
-                  <TouchableOpacity onPress={handleSaveSchool} disabled={saving}>
-                    {saving ? (
-                      <ActivityIndicator size="small" color={colors.secondary} />
-                    ) : (
-                      <Ionicons name="checkmark-circle" size={24} color={colors.success} />
-                    )}
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setEditingSchool(false)} style={{ marginLeft: 6 }}>
-                    <Ionicons name="close-circle" size={24} color={colors.textLight} />
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <TouchableOpacity
-                  style={styles.editableValue}
-                  onPress={() => { setSchoolDraft(schoolName); setEditingSchool(true); }}
-                >
-                  <Text style={styles.value}>{schoolName || 'Tap to set'}</Text>
-                  <Ionicons name="pencil" size={14} color={colors.textLight} style={{ marginLeft: 6 }} />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Change Password */}
-            <TouchableOpacity style={[styles.row, { borderBottomWidth: 0 }]} onPress={() => setShowPasswordModal(true)}>
-              <Text style={styles.label}>Change Password</Text>
-              <View style={styles.editableValue}>
-                <Text style={styles.value}>••••••••</Text>
-                <Ionicons name="chevron-forward" size={16} color={colors.textLight} style={{ marginLeft: 4 }} />
-              </View>
-            </TouchableOpacity>
-          </Card>
-
-          <Card style={styles.card}>
-            <Text style={styles.sectionTitle}>Account Information</Text>
-            <View style={styles.row}>
-              <View style={styles.infoItem}>
-                <Text style={styles.infoLabel}>Email</Text>
-                <Text style={styles.infoValue}>{user?.email || 'Not set'}</Text>
-              </View>
-            </View>
-            <View style={styles.row}>
-              <View style={styles.infoItem}>
-                <Text style={styles.infoLabel}>Member Since</Text>
-                <Text style={styles.infoValue}>
-                  {user?.created_at ? new Date(user.created_at).toLocaleDateString() : 'Unknown'}
+          {/* Guest upgrade prompt */}
+          {isGuest && (
+            <View style={styles.sectionCard}>
+              <View style={{ alignItems: 'center', paddingVertical: 8 }}>
+                <Ionicons name="lock-open-outline" size={32} color={colors.secondary} />
+                <Text style={[styles.sectionTitle, { textAlign: 'center', marginTop: 10 }]}>
+                  Create an Account
                 </Text>
+                <Text style={[styles.sectionSubtitle, { textAlign: 'center', marginBottom: 16 }]}>
+                  Sign up to unlock unlimited scans, AI grading, cloud sync, and more.
+                </Text>
+                <TouchableOpacity
+                  style={styles.signUpPromptBtn}
+                  onPress={() => { signOut(); navigation.reset({ index: 0, routes: [{ name: 'SignUp' }] }); }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="person-add-outline" size={18} color="#fff" />
+                  <Text style={styles.signUpPromptText}>Sign Up Now</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={{ marginTop: 12 }}
+                  onPress={() => { signOut(); navigation.reset({ index: 0, routes: [{ name: 'Login' }] }); }}
+                >
+                  <Text style={[styles.sectionSubtitle, { color: colors.secondary, fontWeight: '600' }]}>
+                    Already have an account? Sign In
+                  </Text>
+                </TouchableOpacity>
               </View>
             </View>
-            <View style={styles.row}>
-              <View style={styles.infoItem}>
-                <Text style={styles.infoLabel}>Account Type</Text>
-                <Text style={styles.infoValue}>Educator</Text>
-              </View>
-            </View>
-          </Card>
+          )}
 
-          <Card style={styles.card}>
-            <Text style={styles.sectionTitle}>Statistics</Text>
-            <View style={styles.statsGrid}>
-              <View style={styles.statBox}>
-                <Ionicons name="document-text" size={24} color={colors.primary} />
-                <Text style={styles.statNumber}>0</Text>
-                <Text style={styles.statLabel}>Tests Created</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Ionicons name="people" size={24} color={colors.secondary} />
-                <Text style={styles.statNumber}>0</Text>
-                <Text style={styles.statLabel}>Students Graded</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Ionicons name="scan" size={24} color={colors.accent} />
-                <Text style={styles.statNumber}>0</Text>
-                <Text style={styles.statLabel}>Papers Scanned</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Ionicons name="time" size={24} color={colors.info} />
-                <Text style={styles.statNumber}>0</Text>
-                <Text style={styles.statLabel}>Hours Saved</Text>
-              </View>
+          {/* Subscription */}
+          {!isGuest && (
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Subscription</Text>
+              {renderSettingRow(
+                isPro ? 'diamond' : 'diamond-outline',
+                `${planLabel} Plan`,
+                isPro ? 'Manage' : 'Upgrade',
+                () => isAdmin ? navigation.navigate('Payment') : Alert.alert('Coming Soon', 'This feature is coming soon. Stay tuned!'),
+                true
+              )}
             </View>
-          </Card>
+          )}
 
-          <Card style={styles.card}>
-            <Text style={styles.sectionTitle}>Storage Usage</Text>
-            <View style={styles.storageBar}>
-              <View style={styles.storageFill} />
-            </View>
-            <View style={styles.storageInfo}>
-              <Text style={styles.storageLabel}>Used: 0 MB</Text>
-              <Text style={styles.storageLabel}>Free: 100 MB</Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Storage Plan</Text>
-              <Text style={styles.value}>Free Plan</Text>
-            </View>
-          </Card>
-
-          <Card style={styles.card}>
-            <Text style={styles.sectionTitle}>Preferences</Text>
-            <View style={styles.row}>
-              <Text style={styles.label}>Notifications</Text>
-              <View style={styles.switchContainer}>
-                <Text style={styles.value}>Enabled</Text>
+          {profileLoading ? renderSkeletonProfile() : isGuest ? renderGuestProfile() : (
+            <>
+              {/* Account Section */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Account</Text>
+                {renderSettingRow('person-outline', 'Name', displayName, () => navigation.navigate('EditProfile'), false)}
+                {renderSettingRow('school-outline', 'School', schoolName || 'Not set', () => navigation.navigate('EditProfile'), false)}
+                {renderSettingRow('lock-closed-outline', 'Change Password', null, () => setShowPasswordModal(true), true)}
               </View>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Theme</Text>
-              <View style={styles.switchContainer}>
-                <Text style={styles.value}>Light</Text>
-              </View>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Language</Text>
-              <View style={styles.switchContainer}>
-                <Text style={styles.value}>English</Text>
-              </View>
-            </View>
-          </Card>
 
-          <Card style={styles.card}>
-            <Text style={styles.sectionTitle}>Quick Actions</Text>
-            <View style={styles.actionsGrid}>
-              <TouchableOpacity style={styles.actionButton} onPress={() => navigation.navigate('Notifications')}>
-                <Ionicons name="notifications" size={20} color={colors.primary} />
-                <Text style={styles.actionText}>View Notifications</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButton} onPress={() => {}}>
-                <Ionicons name="download" size={20} color={colors.secondary} />
-                <Text style={styles.actionText}>Export Data</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButton} onPress={() => {}}>
-                <Ionicons name="shield-checkmark" size={20} color={colors.success} />
-                <Text style={styles.actionText}>Privacy Settings</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButton} onPress={() => {}}>
-                <Ionicons name="help-circle" size={20} color={colors.info} />
-                <Text style={styles.actionText}>Help Center</Text>
-              </TouchableOpacity>
-            </View>
-          </Card>
+              {/* Settings Section */}
+              {isAdmin && (
+                <View style={styles.sectionCard}>
+                  <Text style={styles.sectionTitle}>Administration</Text>
+                  {renderSettingRow('shield-checkmark-outline', 'Admin Panel', null, () => navigation.navigate('AdminDashboard'), true)}
+                </View>
+              )}
 
-          <Card style={styles.card}>
-            <Text style={styles.sectionTitle}>Support</Text>
-            <View style={styles.row}>
-              <Text style={styles.label}>Help Center</Text>
-              <Text style={styles.value}>Browse FAQs</Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Contact Support</Text>
-              <Text style={styles.value}>support@gradesmart.app</Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>App Version</Text>
-              <Text style={styles.value}>v1.0.0</Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Build</Text>
-              <Text style={styles.value}>2025.03.02</Text>
-            </View>
-          </Card>
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Settings</Text>
+                {renderSettingRow('language-outline', 'Language', (LANGUAGES.find(l => l.code === i18n.language) || LANGUAGES[0]).label, () => navigation.navigate('LanguagePicker'), false)}
+                {renderSettingRow('color-palette-outline', 'Theme', `${colorTheme.charAt(0).toUpperCase() + colorTheme.slice(1)} • ${isDark ? 'Dark' : 'Light'}`, () => navigation.navigate('ThemePicker'), false)}
+                {renderSettingRow('notifications-outline', 'Notifications', 'Enabled', () => navigation.navigate('Notifications'), false)}
+                {renderSettingRow('headset-outline', 'Contact support', null, () => navigation.navigate('ContactSupport'), true)}
+              </View>
+
+              {/* Info Section */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>About</Text>
+                {renderSettingRow('information-circle-outline', 'App Version', 'v1.0.0', () => navigation.navigate('AppVersion'), false)}
+                {renderSettingRow('shield-checkmark-outline', 'Privacy Settings', null, () => navigation.navigate('PrivacySettings'), false)}
+                {renderSettingRow('help-circle-outline', 'Help Center', null, () => navigation.navigate('HelpCenter'), true)}
+              </View>
+            </>
+          )}
         </AnimatedScreen>
 
         <AnimatedScreen delay={120}>
-          <View style={styles.actions}>
-            <Button title="Sign Out" variant="primary" onPress={handleSignOut} />
-          </View>
+          <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut} activeOpacity={0.7}>
+            <Ionicons name="log-out-outline" size={20} color={colors.error} />
+            <Text style={styles.signOutText}>{isGuest ? 'Exit Guest Mode' : 'Sign Out'}</Text>
+          </TouchableOpacity>
+          {!isGuest && (
+            <TouchableOpacity style={styles.deleteAccountBtn} onPress={handleDeleteAccount} activeOpacity={0.7}>
+              <Ionicons name="trash-outline" size={18} color={colors.error} />
+              <Text style={styles.deleteAccountText}>Delete Account</Text>
+            </TouchableOpacity>
+          )}
         </AnimatedScreen>
       </ScrollView>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -465,59 +462,28 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
     paddingBottom: 40,
   },
+  backBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+    marginBottom: 4,
+  },
+  // ── Profile header ──
   headerSection: {
     alignItems: 'center',
-    paddingTop: 24,
-    paddingBottom: 16,
+    paddingTop: 32,
+    paddingBottom: 20,
   },
-  name: {
-    ...typography.h2,
-    color: colors.text,
-    marginTop: 8,
-  },
-  role: {
-    ...typography.body,
-    color: colors.textSecondary,
-    marginTop: 4,
-  },
-  card: {
-    marginTop: 16,
-  },
-  sectionTitle: {
-    ...typography.h4,
-    color: colors.text,
-    marginBottom: 12,
-  },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  label: {
-    ...typography.body,
-    color: colors.textSecondary,
-  },
-  value: {
-    ...typography.body,
-    color: colors.text,
-    fontWeight: '600',
-  },
-  urlInput: {
-    ...typography.body,
-    flex: 1,
-    color: colors.text,
-    backgroundColor: colors.surfaceLight,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+  avatarWrapper: {
+    position: 'relative',
+    marginBottom: 4,
   },
   avatar: {
     width: 96,
@@ -525,13 +491,25 @@ const styles = StyleSheet.create({
     borderRadius: 48,
     backgroundColor: colors.border,
   },
-  avatarPlaceholder: {
-    position: 'relative',
+  avatarFallback: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: colors.secondaryLight + '20',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.secondaryLight + '40',
   },
-  avatarBadge: {
+  avatarInitial: {
+    fontSize: 36,
+    fontWeight: '700',
+    color: colors.secondary,
+  },
+  cameraBadge: {
     position: 'absolute',
-    top: 70,
-    right: '35%',
+    bottom: 2,
+    right: 2,
     backgroundColor: colors.secondary,
     borderRadius: 12,
     width: 24,
@@ -541,29 +519,84 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: colors.background,
   },
-  editableValue: {
-    flexDirection: 'row',
+  uploadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 48,
+    backgroundColor: 'rgba(0,0,0,0.35)',
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  editRow: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-  },
-  editInput: {
-    ...typography.body,
+  name: {
+    fontSize: 22,
+    fontWeight: '700',
     color: colors.text,
-    backgroundColor: colors.surfaceLight,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    marginRight: 8,
-    minWidth: 120,
-    textAlign: 'right',
+    marginTop: 10,
   },
+  email: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  editProfileBtn: {
+    marginTop: 14,
+    borderWidth: 1.5,
+    borderColor: colors.secondary,
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 24,
+  },
+  editProfileText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.secondary,
+  },
+  // ── Section cards ──
+  sectionCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 4,
+    marginTop: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 8,
+  },
+  sectionSubtitle: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  // ── Setting rows ──
+  settingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+  },
+  settingRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  settingLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  settingLabel: {
+    fontSize: 15,
+    color: colors.text,
+    marginLeft: 12,
+  },
+  settingValue: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    fontWeight: '500',
+  },
+  // ── Modal ──
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -579,13 +612,14 @@ const styles = StyleSheet.create({
     maxWidth: 360,
   },
   modalTitle: {
-    ...typography.h3,
+    fontSize: 18,
+    fontWeight: '700',
     color: colors.text,
     marginBottom: 16,
     textAlign: 'center',
   },
   modalInput: {
-    ...typography.body,
+    fontSize: 15,
     color: colors.text,
     backgroundColor: colors.surfaceLight,
     borderRadius: 8,
@@ -609,39 +643,88 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   modalCancelText: {
-    ...typography.body,
+    fontSize: 14,
     color: colors.textSecondary,
     fontWeight: '600',
   },
   modalSaveBtn: {
     paddingVertical: 10,
     paddingHorizontal: 20,
-    borderRadius: 8,
+    borderRadius: 10,
     backgroundColor: colors.secondary,
   },
   modalSaveText: {
-    ...typography.body,
+    fontSize: 14,
     color: '#fff',
     fontWeight: '600',
   },
-  actions: {
+  // ── Sign out / delete ──
+  signOutBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
     marginTop: 24,
+    borderRadius: 12,
+    backgroundColor: colors.surface,
   },
-  actionButton: {
-    marginBottom: 12,
+  signOutText: {
+    fontSize: 15,
+    color: colors.error,
+    fontWeight: '600',
+    marginLeft: 8,
   },
-  // Professional feature styles
-  infoItem: {
-    flex: 1,
-    paddingVertical: 4,
+  deleteAccountBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    marginTop: 12,
+    marginBottom: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.error + '30',
   },
-  infoLabel: {
-    ...typography.caption,
+  deleteAccountText: {
+    fontSize: 14,
+    color: colors.error,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  // ── Guest prompt ──
+  signUpPromptBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: colors.secondary,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 28,
+  },
+  signUpPromptText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  // ── Legacy (skeleton) ──
+  card: {
+    marginTop: 16,
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  label: {
+    fontSize: 14,
     color: colors.textSecondary,
-    marginBottom: 2,
   },
-  infoValue: {
-    ...typography.body,
+  value: {
+    fontSize: 14,
     color: colors.text,
     fontWeight: '600',
   },
@@ -658,55 +741,5 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
-  },
-  statNumber: {
-    ...typography.h3,
-    color: colors.text,
-    fontWeight: '700',
-    marginTop: 8,
-    marginBottom: 2,
-  },
-  statLabel: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    textAlign: 'center',
-  },
-  storageBar: {
-    height: 8,
-    backgroundColor: colors.surfaceLight,
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginBottom: 12,
-  },
-  storageFill: {
-    width: '0%',
-    height: '100%',
-    backgroundColor: colors.primary,
-    borderRadius: 4,
-  },
-  storageInfo: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  storageLabel: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-  switchContainer: {
-    flex: 1,
-    alignItems: 'flex-end',
-  },
-  actionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    marginTop: 4,
-  },
-  actionText: {
-    ...typography.caption,
-    color: colors.text,
-    marginTop: 4,
-    textAlign: 'center',
   },
 });

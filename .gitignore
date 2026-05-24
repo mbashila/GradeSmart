@@ -1,5 +1,15 @@
 # OSX
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
 # Xcode
 build/
@@ -35,21 +45,38 @@ local.properties
 node_modules/
 npm-debug.log
 yarn-error.log
+package-lock.json
 
 # Expo
 .expo/
 dist/
 web-build/
 
-# Environment
+# Environment variables (NEVER push these)
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+
+# Old/duplicate project
+smartgrade/
+
+# IDE
+.vscode/
+*.code-workspace
 
 # Misc
 *.log
 *.swp
 *.swo
 *~
+*.tmp
+*.bak

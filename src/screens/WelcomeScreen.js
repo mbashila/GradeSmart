@@ -5,10 +5,13 @@ import { Ionicons } from '@expo/vector-icons';
 import Button from '../components/Button';
 import Logo from '../components/Logo';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 
 export default function WelcomeScreen({ navigation }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
+
   return (
     <LinearGradient
       colors={[colors.background, colors.surfaceLight]}
@@ -55,7 +58,7 @@ export default function WelcomeScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     paddingHorizontal: 24,

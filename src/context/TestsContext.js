@@ -15,15 +15,19 @@ export function TestsProvider({ children }) {
   const [tests, setTests] = useState([]);
   const [hydrated, setHydrated] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const { user } = useAuth();
+  const { user, isGuest } = useAuth();
+
+  const STORAGE_KEY = isGuest ? '@gradesmart:tests:guest' : '@gradesmart:tests';
 
   // Hydrate: try Supabase first, fall back to local cache
   useEffect(() => {
     let mounted = true;
+    setTests([]);
+    setHydrated(false);
     (async () => {
       // Always load local cache first for instant display
       try {
-        const raw = await storage.getItem('@gradesmart:tests');
+        const raw = await storage.getItem(STORAGE_KEY);
         if (mounted && raw) {
           try {
             const parsed = JSON.parse(raw);
@@ -32,8 +36,8 @@ export function TestsProvider({ children }) {
         }
       } catch {}
 
-      // Then sync from Supabase if available
-      if (isSupabaseConfigured && user?.id) {
+      // Then sync from Supabase if available (not for guests)
+      if (!isGuest && isSupabaseConfigured && user?.id) {
         try {
           setSyncing(true);
           const { data, error } = await supabase
@@ -67,13 +71,13 @@ export function TestsProvider({ children }) {
       if (mounted) setHydrated(true);
     })();
     return () => { mounted = false; };
-  }, [user?.id]);
+  }, [user?.id, isGuest]);
 
   // Persist to local cache whenever tests change
   useEffect(() => {
     if (!hydrated) return;
-    storage.setItem('@gradesmart:tests', JSON.stringify(tests));
-  }, [tests, hydrated]);
+    storage.setItem(STORAGE_KEY, JSON.stringify(tests));
+  }, [tests, hydrated, STORAGE_KEY]);
 
   const addTest = useCallback(async (test) => {
     const id = test?.id || Date.now().toString();
@@ -90,8 +94,8 @@ export function TestsProvider({ children }) {
       return [...prev, normalized];
     });
 
-    // Sync to Supabase
-    if (isSupabaseConfigured && user?.id) {
+    // Sync to Supabase (not for guests)
+    if (!isGuest && isSupabaseConfigured && user?.id) {
       try {
         const { questionType, numberOfQuestions, totalPoints, markingKey, mcqCount, ...rest } = normalized;
         await supabase.from('tests').upsert({
@@ -111,12 +115,12 @@ export function TestsProvider({ children }) {
         }, { onConflict: 'id' });
       } catch {}
     }
-  }, [user]);
+  }, [user, isGuest]);
 
   const updateTest = useCallback(async (id, patch) => {
     setTests((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
 
-    if (isSupabaseConfigured && user?.id) {
+    if (!isGuest && isSupabaseConfigured && user?.id) {
       try {
         const updates = { updated_at: new Date().toISOString() };
         if (patch.title !== undefined) updates.title = patch.title;
@@ -130,17 +134,17 @@ export function TestsProvider({ children }) {
         await supabase.from('tests').update(updates).eq('id', id).eq('user_id', user.id);
       } catch {}
     }
-  }, [user]);
+  }, [user, isGuest]);
 
   const deleteTest = useCallback(async (id) => {
     setTests((prev) => prev.filter((t) => t.id !== id));
 
-    if (isSupabaseConfigured && user?.id) {
+    if (!isGuest && isSupabaseConfigured && user?.id) {
       try {
         await supabase.from('tests').delete().eq('id', id).eq('user_id', user.id);
       } catch {}
     }
-  }, [user]);
+  }, [user, isGuest]);
 
   const value = useMemo(() => ({ tests, addTest, updateTest, deleteTest, syncing }), [tests, addTest, updateTest, deleteTest, syncing]);
 

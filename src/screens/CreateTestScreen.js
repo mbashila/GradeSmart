@@ -5,14 +5,22 @@ import Input from '../components/Input';
 import Button from '../components/Button';
 import AnimatedScreen from '../components/AnimatedScreen';
 import Stepper from '../components/Stepper';
+import SubjectPicker from '../components/SubjectPicker';
 import { useToast } from '../components/Toast';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useTests } from '../context/TestsContext';
+import { useSubscription, PLANS } from '../context/SubscriptionContext';
+import { useAuth } from '../context/AuthContext';
 
 export default function CreateTestScreen({ navigation, route }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { showToast } = useToast();
-  const { addTest } = useTests();
+  const { addTest, tests } = useTests();
+  const { isPro, currentPlan } = useSubscription();
+  const { isGuest } = useAuth();
+  const isEditing = !!(route?.params?.id || route?.params?.testId);
   const [testName, setTestName] = useState(route?.params?.testName || '');
   const [subject, setSubject] = useState(route?.params?.subject || '');
   const [classRoom, setClassRoom] = useState(route?.params?.classRoom || '');
@@ -27,6 +35,15 @@ export default function CreateTestScreen({ navigation, route }) {
       return;
     }
     const id = route?.params?.id || route?.params?.testId || Date.now().toString();
+    // Enforce test limit for free/guest users (skip check if editing existing test)
+    if (!isEditing) {
+      const limit = isGuest ? 1 : (currentPlan?.testsLimit ?? PLANS.free.testsLimit);
+      if (limit > 0 && tests.length >= limit && !isPro) {
+        showToast(`Free plan allows only ${limit} test. Upgrade to create more!`, 'error');
+        navigation.navigate('Payment');
+        return;
+      }
+    }
     try {
       addTest({ id, name: testName, testName, subject, classRoom, numberOfQuestions, totalPoints, numberOfStudents });
     } catch {}
@@ -51,7 +68,7 @@ export default function CreateTestScreen({ navigation, route }) {
         rightAction="Save"
         onRightPress={handleContinue}
       />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}>
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
@@ -68,11 +85,11 @@ export default function CreateTestScreen({ navigation, route }) {
             placeholder="e.g., Science Exam - Class 6C"
             />
             
-            <Input
+            <SubjectPicker
               label="Subject"
               value={subject}
-              onChangeText={setSubject}
-              placeholder="e.g., Mathematics, English, Science"
+              onSelect={setSubject}
+              placeholder="Select a subject"
             />
             
             <Input
@@ -83,10 +100,10 @@ export default function CreateTestScreen({ navigation, route }) {
             />
             
             <Input
-              label="Number of Questions"
+              label="Number of Questions (approx.)"
               value={numberOfQuestions}
               onChangeText={setNumberOfQuestions}
-              placeholder="12"
+              placeholder="e.g., 20 or leave blank if unsure"
               keyboardType="numeric"
             />
             
@@ -124,7 +141,7 @@ export default function CreateTestScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,

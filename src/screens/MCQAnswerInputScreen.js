@@ -5,18 +5,20 @@ import Header from '../components/Header';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { gradeMCQ } from '../utils/grading';
 import { useGradingServer } from '../context/GradingServerContext';
 import { detectMCQWithServer } from '../utils/gradingServerService';
 
-const CHOICES = ['A', 'B', 'C', 'D'];
-
 export default function MCQAnswerInputScreen({ navigation, route }) {
-  const { images, testData, studentName } = route.params || {};
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
+  const { images, testData, studentName, studentNumber } = route.params || {};
   const markingKey = testData?.markingKey || '';
   const questionCount = markingKey.length || parseInt(testData?.numberOfQuestions, 10) || 0;
+  const mcqOptions = testData?.mcqOptions || 4;
+  const CHOICES = Array.from({ length: mcqOptions }, (_, i) => String.fromCharCode(65 + i));
 
   const [answers, setAnswers] = useState(
     Array.from({ length: questionCount }, () => '')
@@ -134,6 +136,7 @@ export default function MCQAnswerInputScreen({ navigation, route }) {
       images,
       testData,
       studentName: studentName || 'Student',
+      studentNumber: studentNumber || '',
       score: String(result.score),
       percentage: result.percentage,
       gradingResults: result.results,
@@ -289,7 +292,7 @@ export default function MCQAnswerInputScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -406,11 +409,12 @@ const styles = StyleSheet.create({
   },
   choicesRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 6,
   },
   choiceButton: {
-    flex: 1,
-    marginHorizontal: 3,
+    minWidth: 40,
+    paddingHorizontal: 12,
     paddingVertical: 12,
     borderRadius: 10,
     backgroundColor: colors.surfaceLight,

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
@@ -6,18 +6,14 @@ import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
 import Skeleton, { SkeletonCircle } from '../components/Skeleton';
 import PressableScale from '../components/PressableScale';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useNotifications } from '../context/NotificationsContext';
 
 export default function NotificationsScreen({ navigation }) {
-  const { notifications, unreadCount, markAllRead, toggleRead } = useNotifications();
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 650);
-    return () => clearTimeout(t);
-  }, []);
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
+  const { notifications, unreadCount, markAllRead, toggleRead, loading } = useNotifications();
 
   const getIcon = (type) => {
     switch (type) {
@@ -29,6 +25,11 @@ export default function NotificationsScreen({ navigation }) {
       default:
         return { name: 'information-circle', color: colors.info };
     }
+  };
+
+  const openNotification = (n) => {
+    if (!n.read) toggleRead(n.id);
+    navigation.navigate('NotificationDetail', { notification: n });
   };
 
   return (
@@ -67,18 +68,21 @@ export default function NotificationsScreen({ navigation }) {
               const icon = getIcon(n.type);
               return (
                 <Card key={n.id} style={[styles.notificationCard, !n.read && styles.unreadCard]}>
-                  <PressableScale onPress={() => toggleRead(n.id)} containerStyle={styles.row} haptic={true}>
+                  <PressableScale onPress={() => openNotification(n)} containerStyle={styles.row} haptic={true}>
                     <View style={styles.iconWrap}>
                       <Ionicons name={icon.name} size={24} color={icon.color} />
                     </View>
                     <View style={styles.content}>
                       <View style={styles.titleRow}>
-                        <Text style={styles.title}>{n.title}</Text>
+                        <Text style={[styles.title, !n.read && styles.titleUnread]} numberOfLines={1}>{n.title}</Text>
                         <Text style={styles.time}>{n.time}</Text>
                       </View>
-                      <Text style={styles.message}>{n.message}</Text>
+                      <Text style={styles.preview} numberOfLines={1}>{n.message}</Text>
                     </View>
-                    {!n.read && <View style={styles.dot} />}
+                    <View style={styles.rightCol}>
+                      {!n.read && <View style={styles.dot} />}
+                      <Ionicons name="chevron-forward" size={16} color={colors.textLight} style={styles.chevron} />
+                    </View>
                   </PressableScale>
                 </Card>
               );
@@ -90,7 +94,7 @@ export default function NotificationsScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.surfaceLight,
@@ -108,18 +112,17 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   unreadCard: {
-    borderWidth: 1,
-    borderColor: colors.secondary,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.secondary,
     backgroundColor: colors.secondaryLight + '10',
   },
   row: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   iconWrap: {
     width: 40,
     alignItems: 'center',
-    marginTop: 2,
   },
   content: {
     flex: 1,
@@ -128,26 +131,39 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   title: {
     ...typography.h4,
     color: colors.text,
+    flex: 1,
+    marginRight: 8,
+  },
+  titleUnread: {
+    fontWeight: '700',
   },
   time: {
     ...typography.caption,
     color: colors.textLight,
   },
-  message: {
+  preview: {
     ...typography.body,
     color: colors.textSecondary,
+    fontSize: 13,
+  },
+  rightCol: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 4,
   },
   dot: {
-    width: 10,
-    height: 10,
+    width: 9,
+    height: 9,
     borderRadius: 5,
     backgroundColor: colors.secondary,
-    marginLeft: 8,
-    marginTop: 6,
+    marginBottom: 4,
+  },
+  chevron: {
+    opacity: 0.5,
   },
 });

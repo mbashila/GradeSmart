@@ -8,13 +8,15 @@ import AnimatedScreen from '../components/AnimatedScreen';
 import Button from '../components/Button';
 import Input from '../components/Input';
 import Stepper from '../components/Stepper';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { checkImageQuality } from '../utils/imageQuality';
 
 const { width, height } = Dimensions.get('window');
 
 export default function ScanScreen({ navigation, route }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState('back');
   const [flash, setFlash] = useState('off');
@@ -287,7 +289,7 @@ export default function ScanScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,

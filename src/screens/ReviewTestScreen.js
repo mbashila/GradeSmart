@@ -6,12 +6,15 @@ import Button from '../components/Button';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
 import Stepper from '../components/Stepper';
+import { getGradingMode } from '../components/SubjectPicker';
 import { useToast } from '../components/Toast';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useTests } from '../context/TestsContext';
 
 export default function ReviewTestScreen({ navigation, route }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const testData = route.params || {};
   const { showToast } = useToast();
   const { addTest } = useTests();
@@ -120,6 +123,27 @@ export default function ReviewTestScreen({ navigation, route }) {
               </View>
             </View>
 
+            {(testData?.questionType === 'essay' || testData?.questionType === 'mixed') && (() => {
+              const gm = getGradingMode(testData.subject);
+              return (
+                <View style={styles.gradingModeCard}>
+                  <Ionicons name={gm.icon} size={20} color={gm.color} />
+                  <View style={{ marginLeft: 10, flex: 1 }}>
+                    <Text style={[typography.bodySmall, { color: gm.color, fontWeight: '700' }]}>
+                      AI Grading: {gm.label}
+                    </Text>
+                    <Text style={[typography.caption, { color: colors.textSecondary, marginTop: 2 }]}>
+                      {gm.mode === 'calculation'
+                        ? 'AI will check method, working steps, formulas, and final answers'
+                        : gm.mode === 'science'
+                        ? 'AI will check scientific accuracy, completeness, and clinical relevance'
+                        : 'AI will check correctness, completeness, and quality of expression'}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })()}
+
             {(testData?.questionType === 'multiple-choice' || testData?.questionType === 'mixed') && (
               <View style={styles.detailRow}>
                 <View style={styles.detailIcon}>
@@ -207,7 +231,7 @@ export default function ReviewTestScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -287,5 +311,15 @@ const styles = StyleSheet.create({
   },
   editButton: {
     marginBottom: 12,
+  },
+  gradingModeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceLight,
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
 });

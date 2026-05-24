@@ -6,16 +6,19 @@ import Button from '../components/Button';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
 import Input from '../components/Input';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 
 export default function ScanConfirmationScreen({ navigation, route }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { imageUri, images: imagesParam, testData } = route.params || {};
   const images = React.useMemo(() => {
     if (imagesParam && Array.isArray(imagesParam) && imagesParam.length > 0) return imagesParam;
     return imageUri ? [imageUri] : [];
   }, [imagesParam, imageUri]);
   const [studentName, setStudentName] = React.useState(route?.params?.studentName || '');
+  const [studentNumber, setStudentNumber] = React.useState(route?.params?.studentNumber || '');
   const questionType = testData?.questionType || 'essay';
 
   const getGradingScreen = () => {
@@ -36,6 +39,7 @@ export default function ScanConfirmationScreen({ navigation, route }) {
       images,
       testData,
       studentName: studentName || 'Student',
+      studentNumber: studentNumber || '',
     });
   };
   
@@ -70,6 +74,15 @@ export default function ScanConfirmationScreen({ navigation, route }) {
               onChangeText={setStudentName}
               placeholder="Enter student name"
               iconName="person-outline"
+              returnKeyType="next"
+              style={{ marginBottom: 12 }}
+            />
+            <Input
+              label="Student Number"
+              value={studentNumber}
+              onChangeText={setStudentNumber}
+              placeholder="Enter student number (optional)"
+              iconName="id-card-outline"
               returnKeyType="done"
               style={{ marginBottom: 16 }}
             />
@@ -99,6 +112,12 @@ export default function ScanConfirmationScreen({ navigation, route }) {
                 <Text style={styles.summaryLabel}>Student Name:</Text>
                 <Text style={styles.summaryValue}>{studentName || 'Student'}</Text>
               </View>
+              {!!studentNumber && (
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Student Number:</Text>
+                  <Text style={styles.summaryValue}>{studentNumber}</Text>
+                </View>
+              )}
               
               <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Question Type:</Text>
@@ -159,7 +178,7 @@ export default function ScanConfirmationScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,

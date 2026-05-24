@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 
 export default function Header({ 
@@ -13,6 +13,8 @@ export default function Header({
   showBack = true,
   rightBadge,
 }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.header}>
       <View style={styles.leftSection}>
@@ -48,7 +50,7 @@ export default function Header({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -68,7 +70,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   rightSection: {
-    width: 40,
+    minWidth: 40,
     alignItems: 'flex-end',
   },
   title: {

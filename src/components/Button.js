@@ -1,7 +1,7 @@
 import React from 'react';
 import { Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import PressableScale from './PressableScale';
 
@@ -16,6 +16,8 @@ export default function Button({
   textStyle,
   icon,
 }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const isPrimary = variant === 'primary';
   const isSecondary = variant === 'secondary';
   const isOutline = variant === 'outline';
@@ -80,7 +82,7 @@ export default function Button({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   button: {
     borderRadius: 12,
     paddingVertical: 16,

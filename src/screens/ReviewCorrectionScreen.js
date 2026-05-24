@@ -5,10 +5,12 @@ import Header from '../components/Header';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 
 export default function ReviewCorrectionScreen({ navigation, route }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { studentName, results, testData } = route.params || {};
   const [editedResults, setEditedResults] = useState(results || []);
   const [editedScore, setEditedScore] = useState(
@@ -174,7 +176,7 @@ export default function ReviewCorrectionScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.surfaceLight,

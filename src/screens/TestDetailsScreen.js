@@ -1,19 +1,31 @@
-import React, { useState, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import Header from '../components/Header';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { colors } from '../theme/colors';
+import { Skeleton, SkeletonCircle } from '../components/Skeleton';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useScans } from '../context/ScansContext';
 
 export default function TestDetailsScreen({ navigation, route }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { test } = route.params || {};
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'analytics'
   const { scans } = useScans();
+  const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const related = (scans || []).filter((s) => s.testId === (test?.id || test?.testId));
+
+  useEffect(() => {
+    const t = setTimeout(() => setLoading(false), 600);
+    return () => clearTimeout(t);
+  }, []);
 
   const normalizePercentage = (scan) => {
     const p = scan?.percentage;
@@ -43,6 +55,7 @@ export default function TestDetailsScreen({ navigation, route }) {
       return {
         id: s.id,
         name: s.studentName || 'Student',
+        studentNumber: s.studentNumber || '',
         score: s.score ?? null,
         percentage: pct != null ? Math.round(pct) : null,
         grade: getLetterGrade(pct),
@@ -138,6 +151,138 @@ export default function TestDetailsScreen({ navigation, route }) {
     if (percentage >= 50) return colors.accent;
     return colors.error;
   };
+
+  const generateClassHTML = useCallback(() => {
+    const date = new Date().toLocaleDateString();
+    const testTitle = test?.name || test?.title || 'Test';
+    const subject = test?.subject || '';
+    const grade = test?.grade || '';
+    const totalPoints = test?.totalPoints || 100;
+
+    const studentsHTML = students.map((s, i) => {
+      const pctColor = s.percentage >= 50 ? '#22c55e' : '#ef4444';
+      const gradeColor = s.grade === 'A' ? '#22c55e' : s.grade === 'B' ? '#3b82f6' : s.grade === 'C' ? '#f59e0b' : s.grade === 'D' ? '#f97316' : '#ef4444';
+      return `
+        <tr>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">${i + 1}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;">${s.name}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">${s.studentNumber || '-'}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">${s.score ?? '-'} / ${totalPoints}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:${pctColor};font-weight:600;">${s.percentage != null ? s.percentage + '%' : '-'}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:${gradeColor};font-weight:700;">${s.grade}</td>
+        </tr>`;
+    }).join('');
+
+    return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #1f2937; padding: 40px; }
+        .header { text-align: center; margin-bottom: 32px; padding-bottom: 24px; border-bottom: 2px solid #e5e7eb; }
+        .header h1 { font-size: 24px; color: #111827; margin-bottom: 4px; }
+        .header p { font-size: 13px; color: #6b7280; }
+        .info-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 28px; }
+        .info-item { flex: 1; min-width: 120px; background: #f9fafb; border-radius: 8px; padding: 12px 16px; }
+        .info-label { font-size: 11px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px; }
+        .info-value { font-size: 15px; font-weight: 600; color: #111827; margin-top: 4px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+        thead th { background: #f3f4f6; padding: 10px 12px; text-align: left; font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
+        .summary { display: flex; gap: 12px; margin-top: 28px; }
+        .summary-item { flex: 1; text-align: center; background: #f9fafb; border-radius: 8px; padding: 14px; }
+        .summary-num { font-size: 22px; font-weight: 700; }
+        .summary-label { font-size: 11px; color: #6b7280; margin-top: 2px; }
+        .footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; font-size: 11px; color: #9ca3af; }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>GradeSmart — Class Report</h1>
+        <p>Generated on ${date}</p>
+      </div>
+
+      <div class="info-grid">
+        <div class="info-item">
+          <div class="info-label">Test</div>
+          <div class="info-value">${testTitle}</div>
+        </div>
+        ${subject ? `<div class="info-item"><div class="info-label">Subject</div><div class="info-value">${subject}</div></div>` : ''}
+        ${grade ? `<div class="info-item"><div class="info-label">Grade</div><div class="info-value">${grade}</div></div>` : ''}
+        <div class="info-item">
+          <div class="info-label">Total Points</div>
+          <div class="info-value">${totalPoints}</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Students</div>
+          <div class="info-value">${students.length}</div>
+        </div>
+      </div>
+
+      <h3 style="font-size:16px;margin-bottom:8px;">Student Results</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Student</th>
+            <th>Student No.</th>
+            <th>Score</th>
+            <th>Percentage</th>
+            <th>Grade</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${studentsHTML || '<tr><td colspan="6" style="padding:20px;text-align:center;color:#9ca3af;">No students graded yet</td></tr>'}
+        </tbody>
+      </table>
+
+      <div class="summary">
+        <div class="summary-item">
+          <div class="summary-num" style="color:#6366f1;">${classAverage}%</div>
+          <div class="summary-label">Class Average</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-num" style="color:#22c55e;">${analytics.passCount}</div>
+          <div class="summary-label">Passed</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-num" style="color:#ef4444;">${analytics.failCount}</div>
+          <div class="summary-label">Failed</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-num">${analytics.passRate}%</div>
+          <div class="summary-label">Pass Rate</div>
+        </div>
+      </div>
+
+      <div class="footer">GradeSmart &copy; ${new Date().getFullYear()}</div>
+    </body>
+    </html>`;
+  }, [test, students, classAverage, analytics]);
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+    try {
+      const html = generateClassHTML();
+      const { uri } = await Print.printToFileAsync({ html, base64: false });
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Save or Share Class Results',
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        Alert.alert('Exported', 'PDF generated successfully.');
+      }
+    } catch (e) {
+      Alert.alert('Export Failed', e.message || 'Could not export results.');
+    } finally {
+      setExporting(false);
+    }
+  }, [generateClassHTML]);
   
   return (
     <View style={styles.container}>
@@ -160,30 +305,48 @@ export default function TestDetailsScreen({ navigation, route }) {
         >
         {/* Test Info Card */}
         <AnimatedScreen>
-          <Card style={styles.infoCard}>
-            <View style={styles.infoRow}>
-              <View style={styles.infoItem}>
-                <Ionicons name="calendar" size={20} color={colors.textSecondary} />
-                <Text style={styles.infoLabel}>Date</Text>
-                <Text style={styles.infoValue}>{test?.date || (test?.createdAt ? new Date(test.createdAt).toLocaleDateString() : 'N/A')}</Text>
+          {loading ? (
+            <Card style={styles.infoCard}>
+              <View style={styles.infoRow}>
+                {[1,2,3].map(i => (
+                  <View key={i} style={styles.infoItem}>
+                    <SkeletonCircle size={20} />
+                    <Skeleton width={50} height={12} style={{ marginTop: 6 }} />
+                    <Skeleton width={40} height={16} style={{ marginTop: 4 }} />
+                  </View>
+                ))}
               </View>
-              <View style={styles.infoItem}>
-                <Ionicons name="people" size={20} color={colors.textSecondary} />
-                <Text style={styles.infoLabel}>Class</Text>
-                <Text style={styles.infoValue}>{test?.classRoom || 'N/A'}</Text>
+              <View style={styles.averageScore}>
+                <Skeleton width={100} height={14} />
+                <Skeleton width={50} height={24} style={{ marginTop: 4 }} />
               </View>
-              <View style={styles.infoItem}>
-                <Ionicons name="document-text" size={20} color={colors.textSecondary} />
-                <Text style={styles.infoLabel}>Scans</Text>
-                <Text style={styles.infoValue}>{test?.papersGraded || related.length}</Text>
+            </Card>
+          ) : (
+            <Card style={styles.infoCard}>
+              <View style={styles.infoRow}>
+                <View style={styles.infoItem}>
+                  <Ionicons name="calendar" size={20} color={colors.textSecondary} />
+                  <Text style={styles.infoLabel}>Date</Text>
+                  <Text style={styles.infoValue}>{test?.date || (test?.createdAt ? new Date(test.createdAt).toLocaleDateString() : 'N/A')}</Text>
+                </View>
+                <View style={styles.infoItem}>
+                  <Ionicons name="people" size={20} color={colors.textSecondary} />
+                  <Text style={styles.infoLabel}>Class</Text>
+                  <Text style={styles.infoValue}>{test?.classRoom || 'N/A'}</Text>
+                </View>
+                <View style={styles.infoItem}>
+                  <Ionicons name="document-text" size={20} color={colors.textSecondary} />
+                  <Text style={styles.infoLabel}>Scans</Text>
+                  <Text style={styles.infoValue}>{test?.papersGraded || related.length}</Text>
+                </View>
               </View>
-            </View>
-            
-            <View style={styles.averageScore}>
-              <Text style={styles.averageScoreLabel}>Class Average</Text>
-              <Text style={styles.averageScoreValue}>{classAverage}%</Text>
-            </View>
-          </Card>
+              
+              <View style={styles.averageScore}>
+                <Text style={styles.averageScoreLabel}>Class Average</Text>
+                <Text style={styles.averageScoreValue}>{classAverage}%</Text>
+              </View>
+            </Card>
+          )}
         </AnimatedScreen>
         
         {/* View Mode Toggle */}
@@ -241,7 +404,20 @@ export default function TestDetailsScreen({ navigation, route }) {
             <View style={styles.studentsSection}>
               <Text style={styles.sectionTitle}>Student Results</Text>
               
-              {students.map((student) => (
+              {loading ? [1,2,3].map(i => (
+                <Card key={i} style={styles.studentCard}>
+                  <View style={styles.studentCardHeader}>
+                    <View style={styles.studentInfo}>
+                      <Skeleton width={'60%'} height={16} />
+                      <Skeleton width={'40%'} height={12} style={{ marginTop: 6 }} />
+                    </View>
+                    <View style={styles.studentGrades}>
+                      <Skeleton width={52} height={28} radius={12} />
+                      <Skeleton width={32} height={28} radius={12} style={{ marginLeft: 6 }} />
+                    </View>
+                  </View>
+                </Card>
+              )) : students.map((student) => (
                 <Card
                   key={student.id}
                   style={styles.studentCard}
@@ -460,11 +636,19 @@ export default function TestDetailsScreen({ navigation, route }) {
 
         <AnimatedScreen delay={220}>
           <View style={styles.actions}>
-            <Button
-              title="Export Results"
-              onPress={() => {}}
-              variant="primary"
-            />
+            <TouchableOpacity
+              style={styles.exportBtn}
+              onPress={handleExport}
+              disabled={exporting}
+              activeOpacity={0.7}
+            >
+              {exporting ? (
+                <ActivityIndicator size="small" color={colors.secondary} />
+              ) : (
+                <Ionicons name="download-outline" size={20} color={colors.secondary} />
+              )}
+              <Text style={styles.exportBtnText}>{exporting ? 'Exporting...' : 'Export Results'}</Text>
+            </TouchableOpacity>
           </View>
         </AnimatedScreen>
       </KeyboardAvoidingView>
@@ -472,7 +656,7 @@ export default function TestDetailsScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.surfaceLight,
@@ -770,5 +954,20 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     borderTopWidth: 1,
     borderTopColor: colors.border,
+  },
+  exportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: colors.secondary,
+    gap: 8,
+  },
+  exportBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.secondary,
   },
 });

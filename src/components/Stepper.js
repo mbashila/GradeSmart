@@ -1,10 +1,12 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 
 export default function Stepper({ steps = [], current = 0, style }) {
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={[styles.container, style]}>
       <View style={styles.row}>
@@ -43,7 +45,7 @@ export default function Stepper({ steps = [], current = 0, style }) {
 
 const CIRCLE_SIZE = 24;
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     paddingHorizontal: 4,
     paddingTop: 8,

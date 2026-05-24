@@ -5,10 +5,11 @@ import Header from '../components/Header';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { colors } from '../theme/colors';
+import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { gradeEssay } from '../utils/grading';
-import { transcribeHandwritingWithVision, gradeEssayTextWithOpenAI, getOpenAIKey } from '../utils/openaiService';
+import { transcribeHandwritingWithVision, gradeEssayTextWithOpenAI, gradeDiagramWithVision, getOpenAIKey } from '../utils/openaiService';
+import { getGradingMode } from '../components/SubjectPicker';
 import { useNotifications } from '../context/NotificationsContext';
 
 /**
@@ -59,7 +60,9 @@ function splitTranscriptionByQuestions(fullText, questionCount) {
 }
 
 export default function EssayScoringScreen({ navigation, route }) {
-  const { images, testData, studentName } = route.params || {};
+  const colors = useColors();
+  const styles = React.useMemo(() => makeStyles(colors), [colors]);
+  const { images, testData, studentName, studentNumber } = route.params || {};
   const questionCount = parseInt(testData?.numberOfQuestions, 10) || 1;
   const totalPoints = parseInt(testData?.totalPoints, 10) || questionCount;
   const defaultMax = Math.round(totalPoints / questionCount);
@@ -81,7 +84,7 @@ export default function EssayScoringScreen({ navigation, route }) {
   const [openaiOk, setOpenaiOk] = useState(false);
   const { addNotification } = useNotifications();
 
-  // Check OpenAI key on mount
+  // Check grading key on mount
   useEffect(() => {
     (async () => {
       const key = await getOpenAIKey();
@@ -101,7 +104,7 @@ export default function EssayScoringScreen({ navigation, route }) {
   // Combined full text from all pages
   const [fullOcrText, setFullOcrText] = useState('');
 
-  // Run OCR on ALL pages using OpenAI Vision (reads handwriting)
+  // Run OCR on ALL pages (reads handwriting)
   const runOcrOnAllPages = useCallback(async (imgs) => {
     setPipelineStep('ocr');
     setPageTexts([]);
@@ -161,7 +164,7 @@ export default function EssayScoringScreen({ navigation, route }) {
       return;
     }
     if (!openaiOk) {
-      setPipelineMsg('OpenAI API key not set. Score manually.');
+      setPipelineMsg('API key not set. Score manually.');
       setPipelineStep('done');
       setPipelineDone(true);
       return;
@@ -169,12 +172,25 @@ export default function EssayScoringScreen({ navigation, route }) {
     runOcrOnAllPages(images);
   }, [openaiOk]);
 
-  // Store AI feedback per question
+  // Store grading feedback per question
   const [aiFeedback, setAiFeedback] = useState(Array.from({ length: questionCount }, () => ''));
 
-  // Teacher confirms OCR text → proceed to AI grading (OpenAI text-based)
+  // Detect diagram-type questions from extracted data
+  const extractedQuestions = testData?.extractedQuestions || [];
+  const diagramQuestionIndices = React.useMemo(() => {
+    const indices = new Set();
+    extractedQuestions.forEach((q) => {
+      if (q.type === 'diagram') {
+        // question numbers are 1-indexed, scores array is 0-indexed
+        indices.add(q.number - 1);
+      }
+    });
+    return indices;
+  }, [extractedQuestions]);
+
+  // Teacher confirms OCR text → proceed to grading
   const handleConfirmOCR = useCallback(async () => {
-    if (!fullOcrText.trim()) {
+    if (!fullOcrText.trim() && diagramQuestionIndices.size === 0) {
       setPipelineMsg('No text to grade. Score manually.');
       setPipelineStep('done');
       setPipelineDone(true);
@@ -182,58 +198,92 @@ export default function EssayScoringScreen({ navigation, route }) {
     }
 
     setPipelineStep('ai');
-    setPipelineMsg('OpenAI is grading the answers...');
+    setPipelineMsg('Grading answers...');
     try {
-      const questionsForGrading = scores.map((s, i) => ({
-        questionNumber: s.question,
-        questionText: questionTexts[i] || `Question ${s.question}`,
-        studentAnswer: transcriptions[i] || '',
-        maxPoints: s.maxPoints,
-      }));
-
-      const aiResult = await gradeEssayTextWithOpenAI(questionsForGrading, {
-        subject: testData?.subject || '',
-        gradeLevel: testData?.grade || '',
-      });
-
-      if (!aiResult.error && aiResult.results) {
-        setScores((prev) =>
-          prev.map((s, i) => ({
-            ...s,
-            points: Math.min(aiResult.results[i]?.score || 0, s.maxPoints),
-          }))
-        );
-        setAiFeedback(aiResult.results.map(r => r.feedback || ''));
-        setPipelineMsg('AI graded all answers. Review scores below.');
-        
-        // Notify when AI grading completes
-        const finalScore = scores.reduce((sum, s) => sum + s.points, 0);
-        addNotification({
-          type: 'success',
-          title: 'Essay graded',
-          message: `AI completed grading for ${studentName || 'Student'}. Score: ${finalScore}/${totalPoints}`,
-        });
-      } else {
-        setPipelineMsg(`AI grading failed: ${aiResult.error}. Score manually.`);
-        addNotification({
-          type: 'error',
-          title: 'AI grading failed',
-          message: `Could not grade ${studentName || 'Student'}: ${aiResult.error}`,
-        });
+      // Grade diagram questions using vision (send student answer image directly)
+      const diagramResults = {};
+      if (diagramQuestionIndices.size > 0 && images?.length > 0) {
+        let diagramIdx = 0;
+        for (const qIdx of diagramQuestionIndices) {
+          diagramIdx++;
+          setPipelineMsg(`Grading diagram ${diagramIdx} of ${diagramQuestionIndices.size}...`);
+          try {
+            const result = await gradeDiagramWithVision(images[0], {
+              questionText: questionTexts[qIdx] || `Question ${qIdx + 1}`,
+              maxPoints: scores[qIdx]?.maxPoints || 10,
+              subject: testData?.subject || '',
+            });
+            diagramResults[qIdx] = result;
+          } catch {
+            diagramResults[qIdx] = { score: 0, maxPoints: scores[qIdx]?.maxPoints || 10, feedback: 'Could not grade diagram.' };
+          }
+        }
       }
+
+      // Grade text-based questions (non-diagram)
+      const textQuestions = scores
+        .map((s, i) => ({ ...s, index: i }))
+        .filter((_, i) => !diagramQuestionIndices.has(i));
+
+      let textResults = [];
+      if (textQuestions.length > 0 && fullOcrText.trim()) {
+        setPipelineMsg('Grading written answers...');
+        const questionsForGrading = textQuestions.map((s) => ({
+          questionNumber: s.question,
+          questionText: questionTexts[s.index] || `Question ${s.question}`,
+          studentAnswer: transcriptions[s.index] || '',
+          maxPoints: s.maxPoints,
+        }));
+
+        const aiResult = await gradeEssayTextWithOpenAI(questionsForGrading, {
+          subject: testData?.subject || '',
+          gradeLevel: testData?.grade || '',
+        });
+
+        if (!aiResult.error && aiResult.results) {
+          textResults = aiResult.results;
+        }
+      }
+
+      // Merge results: diagram + text
+      const newScores = [...scores];
+      const newFeedback = [...aiFeedback];
+      let textResultIdx = 0;
+
+      for (let i = 0; i < scores.length; i++) {
+        if (diagramQuestionIndices.has(i) && diagramResults[i]) {
+          newScores[i] = { ...newScores[i], points: Math.min(diagramResults[i].score, newScores[i].maxPoints) };
+          newFeedback[i] = diagramResults[i].feedback || '';
+        } else if (textResults[textResultIdx]) {
+          newScores[i] = { ...newScores[i], points: Math.min(textResults[textResultIdx].score || 0, newScores[i].maxPoints) };
+          newFeedback[i] = textResults[textResultIdx].feedback || '';
+          textResultIdx++;
+        }
+      }
+
+      setScores(newScores);
+      setAiFeedback(newFeedback);
+      setPipelineMsg('Review scores below.');
+
+      const finalScore = newScores.reduce((sum, s) => sum + s.points, 0);
+      addNotification({
+        type: 'success',
+        title: 'Grading complete',
+        message: `Grading completed for ${studentName || 'Student'}. Score: ${finalScore}/${totalPoints}`,
+      });
     } catch {
-      setPipelineMsg('AI grading failed. Score manually.');
+      setPipelineMsg('Grading failed. Score manually.');
       addNotification({
         type: 'error',
-        title: 'AI grading failed',
+        title: 'Grading failed',
         message: `Could not grade ${studentName || 'Student'}. Please score manually.`,
       });
     }
     setPipelineStep('done');
     setPipelineDone(true);
-  }, [scores, transcriptions, questionTexts, fullOcrText, testData]);
+  }, [scores, transcriptions, questionTexts, fullOcrText, testData, diagramQuestionIndices, images, aiFeedback]);
 
-  // Skip AI, go straight to manual scoring
+  // Skip auto-grading, go straight to manual scoring
   const handleSkipAI = useCallback(() => {
     setPipelineMsg('Score manually using the extracted text.');
     setPipelineStep('done');
@@ -277,6 +327,7 @@ export default function EssayScoringScreen({ navigation, route }) {
       images,
       testData,
       studentName: studentName || 'Student',
+      studentNumber: studentNumber || '',
       score: String(result.score),
       percentage: result.percentage,
       gradingResults: result.results,
@@ -284,7 +335,7 @@ export default function EssayScoringScreen({ navigation, route }) {
     });
   };
 
-  // Full-screen scanning state (OCR running or AI grading)
+  // Full-screen scanning state (OCR running or grading)
   if (pipelineStep === 'ocr' || pipelineStep === 'ai') {
     const currentPageImg = pipelineStep === 'ocr' && images?.length > 0
       ? images[Math.min(ocrPageProgress.current - 1, images.length - 1)] || images[0]
@@ -310,14 +361,14 @@ export default function EssayScoringScreen({ navigation, route }) {
           </View>
           <View style={styles.pipelineLabels}>
             <Text style={[styles.stepLabel, pipelineStep === 'ocr' && { color: colors.accent }]}>OCR ({ocrPageProgress.current}/{ocrPageProgress.total})</Text>
-            <Text style={[styles.stepLabel, pipelineStep === 'ai' && { color: colors.secondary }]}>AI Grading</Text>
+            <Text style={[styles.stepLabel, pipelineStep === 'ai' && { color: colors.secondary }]}>Grading</Text>
           </View>
         </View>
       </View>
     );
   }
 
-  // OCR Review screen — show extracted text (read-only) before AI grading
+  // OCR Review screen — show extracted text (read-only) before grading
   if (pipelineStep === 'review') {
     return (
       <View style={styles.container}>
@@ -380,8 +431,8 @@ export default function EssayScoringScreen({ navigation, route }) {
 
           <AnimatedScreen delay={60}>
             <View style={{ gap: 10, marginTop: 16 }}>
-              <Button title="Continue to AI Grading" onPress={handleConfirmOCR} variant="primary" />
-              <Button title="Skip AI — Score Manually" onPress={handleSkipAI} variant="outline" />
+              <Button title="Continue to Grading" onPress={handleConfirmOCR} variant="primary" />
+              <Button title="Score Manually" onPress={handleSkipAI} variant="outline" />
               <TouchableOpacity style={styles.retryBtn} onPress={handleRetry}>
                 <Ionicons name="refresh" size={18} color="#fff" />
                 <Text style={styles.retryBtnText}>Re-scan All Pages</Text>
@@ -405,6 +456,19 @@ export default function EssayScoringScreen({ navigation, route }) {
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <AnimatedScreen>
           <Text style={styles.title}>Essay / Handwriting Scoring</Text>
+
+          {/* Grading mode indicator */}
+          {(() => {
+            const gm = getGradingMode(testData?.subject);
+            return (
+              <View style={[styles.gradingModeBanner, { backgroundColor: gm.color + '10', borderColor: gm.color + '30' }]}>
+                <Ionicons name={gm.icon} size={16} color={gm.color} />
+                <Text style={[styles.gradingModeText, { color: gm.color }]}>
+                  {gm.label} — {testData?.subject || 'General'}
+                </Text>
+              </View>
+            );
+          })()}
 
           {/* Pipeline status */}
           <View style={[styles.statusBanner, {
@@ -553,7 +617,7 @@ export default function EssayScoringScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -625,6 +689,20 @@ const styles = StyleSheet.create({
     ...typography.h2,
     color: colors.text,
     marginBottom: 8,
+  },
+  gradingModeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 10,
+  },
+  gradingModeText: {
+    ...typography.caption,
+    fontWeight: '700',
+    marginLeft: 6,
   },
   statusBanner: {
     flexDirection: 'row',
