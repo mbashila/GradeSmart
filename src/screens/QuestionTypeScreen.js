@@ -12,263 +12,322 @@ import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import Input from '../components/Input';
 import { extractQuestionsFromPaperImage, getOpenAIKey } from '../utils/openaiService';
+import { useAuth } from '../context/AuthContext';
 
-const SECTION_TYPES = [
+const ALL_SECTION_TYPES = [
   { key: 'mcq', label: 'MCQs', icon: 'radio-button-on' },
   { key: 'fill_in_blank', label: 'Fill in Blanks', icon: 'remove-outline' },
+  { key: 'matching', label: 'Matching', icon: 'git-compare-outline' },
   { key: 'short_notes', label: 'Short Notes', icon: 'create-outline' },
   { key: 'comprehension', label: 'Comprehension', icon: 'book-outline' },
   { key: 'essay', label: 'Essay', icon: 'document-text-outline' },
-  { key: 'diagram', label: 'Diagrams', icon: 'image-outline' },
-  { key: 'calculation', label: 'Calculations', icon: 'calculator-outline' },
+];
+const ESSAY_SECTION_TYPES = ALL_SECTION_TYPES.filter(t => t.key !== 'mcq');
+const SECTION_SUB_TYPES = [
+  { key: 'hasDiagrams', label: 'Diagrams', icon: 'image-outline' },
+  { key: 'hasCalculations', label: 'Calculations', icon: 'calculator-outline' },
+  { key: 'hasGraphs', label: 'Graphs / Charts', icon: 'bar-chart-outline' },
+  { key: 'hasTables', label: 'Tables', icon: 'grid-outline' },
+  { key: 'hasMaps', label: 'Maps', icon: 'map-outline' },
+  { key: 'hasCodeSnippets', label: 'Code Snippets', icon: 'code-slash-outline' },
+  { key: 'hasTrueFalse', label: 'True / False', icon: 'checkmark-circle-outline' },
 ];
 
 export default function QuestionTypeScreen({ navigation, route }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { showToast } = useToast();
+  const { isAdmin } = useAuth();
   const [questionType, setQuestionType] = useState(route?.params?.questionType || '');
-  const [markingKey, setMarkingKey] = useState(route?.params?.markingKey || '');
-  const [mcqCount, setMcqCount] = useState(route?.params?.mcqCount || '');
-  const [mcqOptions, setMcqOptions] = useState(route?.params?.mcqOptions || 4); // number of options per question (4=A-D, 5=A-E, etc.)
-  const [questionTexts, setQuestionTexts] = useState(
-    route?.params?.questionTexts?.length > 0 ? route.params.questionTexts : ['']
-  );
-  
+  const [mcqOptions, setMcqOptions] = useState(route?.params?.mcqOptions || 4);
+
   const testData = route.params || {};
-  const expectedCount = Number.isFinite(parseInt(testData.numberOfQuestions)) ? parseInt(testData.numberOfQuestions) : null;
 
-  // Question paper upload state
-  const [paperImages, setPaperImages] = useState([]);
-  const [selectedSections, setSelectedSections] = useState([]);
-  const [sectionMapping, setSectionMapping] = useState([]); // [{label:'A', type:'mcq'}, {label:'B', type:'essay'}]
-  const [extracting, setExtracting] = useState(false);
-  const [extractionMsg, setExtractionMsg] = useState('');
-  const [extractedQuestions, setExtractedQuestions] = useState([]);
-  const [extractedSections, setExtractedSections] = useState([]);
-  const [extractionDone, setExtractionDone] = useState(false);
+  // ── Direct MCQ state (when questionType === 'multiple-choice') ──
+  const [directMcq, setDirectMcq] = useState({
+    questionCount: '',
+    markingKey: '',
+    mcqOptions: 4,
+  });
 
-  // Section mapping helpers
-  const addSectionMapping = () => {
-    const nextLabel = String.fromCharCode(65 + sectionMapping.length); // A, B, C...
-    setSectionMapping(prev => [...prev, { label: nextLabel, type: '' }]);
+  // ── Per-section state ──
+  // Each section: { label, type, images:[], extracting, extractionDone, extractionMsg, questions:[], markingKey:'', mcqOptions:4, mcqQuestionCount:'', manualQuestions:[''], expanded:true }
+  const [sections, setSections] = useState([]);
+  const [expandedSection, setExpandedSection] = useState(0); // index of expanded section
+
+  // ── Section CRUD ──
+  const addSection = () => {
+    const nextLabel = String.fromCharCode(65 + sections.length);
+    setSections(prev => [...prev, {
+      label: nextLabel,
+      type: '',
+      images: [],
+      extracting: false,
+      extractionDone: false,
+      extractionMsg: '',
+      questions: [],
+      markingKey: '',
+      mcqOptions: 4,
+      mcqQuestionCount: '',
+      manualQuestions: [''],
+      expanded: true,
+      hasDiagrams: false,
+      hasCalculations: false,
+      hasGraphs: false,
+      hasTables: false,
+      hasMaps: false,
+      hasCodeSnippets: false,
+      hasTrueFalse: false,
+    }]);
+    setExpandedSection(sections.length);
   };
-  const updateSectionType = (index, type) => {
-    setSectionMapping(prev => {
-      const updated = prev.map((s, i) => i === index ? { ...s, type } : s);
-      // Sync selectedSections from the updated mapping
-      const types = updated.map(s => s.type).filter(Boolean);
-      setSelectedSections([...new Set(types)]);
-      return updated;
+
+  const updateSection = (index, updates) => {
+    setSections(prev => prev.map((s, i) => i === index ? { ...s, ...updates } : s));
+  };
+
+  const removeSection = (index) => {
+    setSections(prev => {
+      const updated = prev.filter((_, i) => i !== index);
+      // Re-label A, B, C...
+      return updated.map((s, i) => ({ ...s, label: String.fromCharCode(65 + i) }));
     });
-  };
-  const removeSectionMapping = (index) => {
-    setSectionMapping(prev => prev.filter((_, i) => i !== index));
+    if (expandedSection >= sections.length - 1) setExpandedSection(Math.max(0, sections.length - 2));
   };
 
-  const handleQuestionTextChange = (index, text) => {
-    setQuestionTexts((prev) => {
-      const next = [...prev];
-      next[index] = text;
-      return next;
-    });
-  };
-
-  const numericMcqCount = (() => {
-    const n = parseInt(mcqCount, 10);
-    if (Number.isFinite(n)) return n; 
-    return null;
-  })();
-
-  const mcqMaxLetter = String.fromCharCode(64 + mcqOptions); // e.g., 4 -> 'D', 5 -> 'E'
-  const mcqLetterRange = Array.from({ length: mcqOptions }, (_, i) => String.fromCharCode(65 + i)).join(''); // 'ABCD' or 'ABCDE' etc.
-
-  const handleKeyChange = (txt) => {
-    const allowedRegex = new RegExp(`[^A-${mcqMaxLetter}]`, 'g');
-    let v = (txt || '').toUpperCase().replace(allowedRegex, '');
-    const limit = questionType === 'mixed' ? (numericMcqCount || 0) : (expectedCount || 0);
-    if (limit && v.length > limit) v = v.slice(0, limit);
-    setMarkingKey(v);
-  };
-
-  const handleMcqCountChange = (txt) => {
-    let cleaned = (txt || '').replace(/[^0-9]/g, '');
-    if (cleaned.length > 0) {
-      let n = parseInt(cleaned, 10);
-      if (expectedCount && n > expectedCount) n = expectedCount;
-      if (n < 0) n = 0;
-      cleaned = String(n);
-    }
-    setMcqCount(cleaned);
-    setMarkingKey((prev) => {
-      const limit = parseInt(cleaned || '0', 10) || 0;
-      return limit && prev ? prev.slice(0, limit) : '';
-    });
-  };
-
-  // ── Question paper photo capture ──
-  const handleTakePhoto = useCallback(async () => {
+  // ── Per-section photo capture ──
+  const handleSectionTakePhoto = useCallback(async (sIdx) => {
     try {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission needed', 'Camera permission is required to take photos.');
         return;
       }
-      const result = await ImagePicker.launchCameraAsync({
-        quality: 0.8,
-        allowsEditing: false,
-      });
+      const result = await ImagePicker.launchCameraAsync({ quality: 0.8, allowsEditing: false });
       if (!result.canceled && result.assets?.[0]) {
-        setPaperImages((prev) => [...prev, result.assets[0].uri]);
+        setSections(prev => prev.map((s, i) => i === sIdx
+          ? { ...s, images: [...s.images, result.assets[0].uri], extractionDone: false, questions: [], extractionMsg: '' }
+          : s
+        ));
       }
-    } catch {
-      showToast('Failed to take photo', 'error');
-    }
+    } catch { showToast('Failed to take photo', 'error'); }
   }, []);
 
-  const handlePickFromGallery = useCallback(async () => {
+  const handleSectionPickGallery = useCallback(async (sIdx) => {
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: true,
-        quality: 0.8,
-      });
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.8 });
       if (!result.canceled && result.assets?.length > 0) {
-        setPaperImages((prev) => [...prev, ...result.assets.map(a => a.uri)]);
+        setSections(prev => prev.map((s, i) => i === sIdx
+          ? { ...s, images: [...s.images, ...result.assets.map(a => a.uri)], extractionDone: false, questions: [], extractionMsg: '' }
+          : s
+        ));
       }
-    } catch {
-      showToast('Failed to pick images', 'error');
-    }
+    } catch { showToast('Failed to pick images', 'error'); }
   }, []);
 
-  const removePaperImage = (index) => {
-    setPaperImages((prev) => prev.filter((_, i) => i !== index));
-    setExtractionDone(false);
-    setExtractedQuestions([]);
-    setExtractedSections([]);
+  const removeSectionImage = (sIdx, imgIdx) => {
+    setSections(prev => prev.map((s, i) => i === sIdx
+      ? { ...s, images: s.images.filter((_, j) => j !== imgIdx), extractionDone: false, questions: [], extractionMsg: '' }
+      : s
+    ));
   };
 
-  // ── AI extraction ──
-  const handleExtractQuestions = useCallback(async () => {
-    if (paperImages.length === 0) {
-      showToast('Please upload at least one question paper image', 'error');
+  // ── Per-section extraction ──
+  const handleSectionExtract = useCallback(async (sIdx) => {
+    const section = sections[sIdx];
+    if (!section || section.images.length === 0) {
+      showToast('Upload at least one photo for this section', 'error');
       return;
     }
     const key = await getOpenAIKey();
-    if (!key) {
-      showToast('API key not set. Go to Settings to add it.', 'error');
-      return;
-    }
+    if (!key) { showToast('API key not set. Go to Settings to add it.', 'error'); return; }
 
-    setExtracting(true);
-    setExtractionMsg(`Reading question paper (${paperImages.length} page${paperImages.length > 1 ? 's' : ''})...`);
+    updateSection(sIdx, { extracting: true, extractionMsg: `Reading Section ${section.label} (${section.images.length} page${section.images.length > 1 ? 's' : ''})...` });
+
     try {
-      const result = await extractQuestionsFromPaperImage(paperImages, {
+      const result = await extractQuestionsFromPaperImage(section.images, {
         subject: testData?.subject || '',
-        sectionTypes: selectedSections,
-        sectionMapping: sectionMapping.length > 0 ? sectionMapping : undefined,
+        sectionTypes: [section.type],
+        sectionMapping: [{ label: section.label, type: section.type }],
       });
 
       if (result.error) {
-        setExtractionMsg(`Failed: ${result.error}`);
-        showToast('Could not extract questions', 'error');
+        updateSection(sIdx, { extracting: false, extractionDone: true, extractionMsg: `Failed: ${result.error}` });
+        showToast(`Section ${section.label}: Could not extract questions`, 'error');
       } else {
-        setExtractedQuestions(result.questions);
-        setExtractedSections(result.sections);
-        // Auto-populate questionTexts from extracted questions (non-MCQ)
-        const nonMcq = result.questions.filter(q => q.type !== 'mcq');
-        setQuestionTexts(nonMcq.map(q => q.text));
-        // Auto-detect MCQ count from extraction
-        const mcqs = result.questions.filter(q => q.type === 'mcq');
-        if (mcqs.length > 0 && (questionType === 'mixed' || questionType === 'multiple-choice')) {
-          setMcqCount(String(mcqs.length));
-        }
-        setExtractionMsg(`Found ${result.questions.length} questions in ${result.sections.length} sections.`);
-        showToast(`Extracted ${result.questions.length} questions`, 'success');
+        updateSection(sIdx, {
+          extracting: false,
+          extractionDone: true,
+          questions: result.questions,
+          extractionMsg: `Found ${result.questions.length} questions.`,
+        });
+        showToast(`Section ${section.label}: Extracted ${result.questions.length} questions`, 'success');
       }
-    } catch (e) {
-      setExtractionMsg('Extraction failed. Try again.');
+    } catch {
+      updateSection(sIdx, { extracting: false, extractionDone: true, extractionMsg: 'Extraction failed. Try again.' });
       showToast('Something went wrong', 'error');
     }
-    setExtracting(false);
-    setExtractionDone(true);
-  }, [paperImages, selectedSections, sectionMapping, questionType, testData]);
+  }, [sections, testData]);
 
+  // ── Direct MCQ key handler ──
+  const handleDirectKeyChange = (txt) => {
+    const maxLetter = String.fromCharCode(64 + (directMcq.mcqOptions || 4));
+    const allowedRegex = new RegExp(`[^A-${maxLetter}]`, 'g');
+    let v = (txt || '').toUpperCase().replace(allowedRegex, '');
+    const limit = parseInt(directMcq.questionCount, 10) || 0;
+    if (limit && v.length > limit) v = v.slice(0, limit);
+    setDirectMcq(prev => ({ ...prev, markingKey: v }));
+  };
+
+  // ── MCQ key handling per section ──
+  const handleSectionKeyChange = (sIdx, txt) => {
+    const section = sections[sIdx];
+    const maxLetter = String.fromCharCode(64 + (section.mcqOptions || 4));
+    const allowedRegex = new RegExp(`[^A-${maxLetter}]`, 'g');
+    let v = (txt || '').toUpperCase().replace(allowedRegex, '');
+    const limit = parseInt(section.mcqQuestionCount, 10) || section.questions.length || 0;
+    if (limit && v.length > limit) v = v.slice(0, limit);
+    updateSection(sIdx, { markingKey: v });
+  };
+
+  // ── Manual question handling per section ──
+  const handleSectionManualChange = (sIdx, qIdx, text) => {
+    setSections(prev => prev.map((s, i) => {
+      if (i !== sIdx) return s;
+      const updated = [...s.manualQuestions];
+      updated[qIdx] = text;
+      return { ...s, manualQuestions: updated };
+    }));
+  };
+
+  const addSectionManualQuestion = (sIdx) => {
+    setSections(prev => prev.map((s, i) => i === sIdx ? { ...s, manualQuestions: [...s.manualQuestions, ''] } : s));
+  };
+
+  const removeSectionManualQuestion = (sIdx, qIdx) => {
+    setSections(prev => prev.map((s, i) => {
+      if (i !== sIdx) return s;
+      return { ...s, manualQuestions: s.manualQuestions.filter((_, j) => j !== qIdx) };
+    }));
+  };
+
+  // ── Validation & Continue ──
   const handleContinue = () => {
     if (!questionType) {
       showToast('Please select a question type', 'error');
       return;
     }
 
-    // Force questions to be provided (either extracted or manual)
-    const hasExtractedQuestions = extractionDone && extractedQuestions.length > 0;
-    const hasManualQuestions = questionTexts.some(t => t && t.trim());
-    const hasMcqKey = markingKey && markingKey.length > 0;
+    if (questionType === 'multiple-choice') {
+      const qCount = parseInt(directMcq.questionCount, 10) || 0;
+      if (!qCount) { showToast('Enter the number of questions', 'error'); return; }
+      if (!directMcq.markingKey || directMcq.markingKey.length !== qCount) {
+        showToast(`Marking key must have exactly ${qCount} answers`, 'error'); return;
+      }
+    } else if (questionType === 'essay' || questionType === 'mixed') {
+      if (sections.length === 0) {
+        showToast('Add at least one section and upload the question paper', 'error');
+        return;
+      }
+
+      // Validate each section
+      for (const sec of sections) {
+        if (!sec.type) {
+          showToast(`Please assign a type for Section ${sec.label}`, 'error');
+          return;
+        }
+        if (sec.type === 'mcq') {
+          const expectedCount = parseInt(sec.mcqQuestionCount, 10) || 0;
+          if (!expectedCount) {
+            showToast(`Section ${sec.label}: Enter the number of MCQ questions`, 'error');
+            return;
+          }
+          if (!sec.markingKey || sec.markingKey.length !== expectedCount) {
+            showToast(`Section ${sec.label}: Marking key must have exactly ${expectedCount} answers`, 'error');
+            return;
+          }
+        } else {
+          // Non-MCQ sections need extracted or manually typed questions
+          const hasExtracted = sec.extractionDone && sec.questions.length > 0;
+          const hasManual = sec.manualQuestions.some(q => q && q.trim());
+          if (!hasExtracted && !hasManual) {
+            showToast(`Section ${sec.label}: Upload & extract questions, or type them manually`, 'error');
+            return;
+          }
+        }
+      }
+    }
+
+    // Build structured section data for downstream screens
+    let sectionData;
 
     if (questionType === 'multiple-choice') {
-      if (!hasMcqKey) {
-        showToast('Please enter the MCQ marking key', 'error');
-        return;
-      }
-      if (expectedCount && markingKey.length !== expectedCount) {
-        showToast(`Marking key must have ${expectedCount} answers`, 'error');
-        return;
-      }
-    } else if (questionType === 'essay') {
-      if (!hasExtractedQuestions && !hasManualQuestions) {
-        showToast('Please upload & extract questions or type them manually', 'error');
-        return;
-      }
-    } else if (questionType === 'mixed') {
-      const hasMcqSection = sectionMapping.length === 0 || sectionMapping.some(s => s.type === 'mcq');
-      if (hasMcqSection) {
-        const n = numericMcqCount || 0;
-        if (!n || n <= 0) {
-          showToast('Enter how many MCQs are in this mixed test', 'error');
-          return;
+      // Direct MCQ mode — build a single pseudo-section
+      const qCount = parseInt(directMcq.questionCount, 10) || 0;
+      const questions = Array.from({ length: qCount }, (_, i) => ({
+        number: i + 1, text: `Question ${i + 1}`, type: 'mcq', section: 'Section A', maxPoints: 1,
+      }));
+      sectionData = [{
+        label: 'A',
+        type: 'mcq',
+        questions,
+        markingKey: directMcq.markingKey,
+        mcqOptions: directMcq.mcqOptions,
+      }];
+    } else {
+      sectionData = sections.map(s => {
+        let questions;
+        if (s.questions.length > 0) {
+          questions = s.questions;
+        } else if (s.type === 'mcq' && s.markingKey) {
+          questions = Array.from({ length: s.markingKey.length }, (_, i) => ({
+            number: i + 1, text: `Question ${i + 1}`, type: 'mcq', section: `Section ${s.label}`, maxPoints: 1,
+          }));
+        } else {
+          questions = s.manualQuestions.filter(q => q && q.trim()).map((text, i) => ({
+            number: i + 1, text, type: s.type, section: `Section ${s.label}`, maxPoints: 0,
+          }));
         }
-        if (expectedCount && n > expectedCount) {
-          showToast(`MCQ count cannot exceed total questions (${expectedCount})`, 'error');
-          return;
-        }
-        if (!markingKey || markingKey.length !== n) {
-          showToast(`Enter a ${n}-answer MCQ key (A-${mcqMaxLetter})`, 'error');
-          return;
-        }
-      }
-      if (!hasExtractedQuestions && !hasManualQuestions) {
-        showToast('Please upload & extract questions or type essay questions manually', 'error');
-        return;
-      }
+        return {
+          label: s.label,
+          type: s.type,
+          questions,
+          markingKey: s.type === 'mcq' ? s.markingKey : undefined,
+          mcqOptions: s.type === 'mcq' ? s.mcqOptions : undefined,
+          images: s.images,
+          hasDiagrams: s.hasDiagrams || false,
+          hasCalculations: s.hasCalculations || false,
+          hasGraphs: s.hasGraphs || false,
+          hasTables: s.hasTables || false,
+          hasMaps: s.hasMaps || false,
+          hasCodeSnippets: s.hasCodeSnippets || false,
+          hasTrueFalse: s.hasTrueFalse || false,
+        };
+      });
     }
 
-    // Validate sections are mapped if user defined them
-    if (sectionMapping.length > 0) {
-      const unmapped = sectionMapping.filter(s => !s.type);
-      if (unmapped.length > 0) {
-        showToast(`Please assign a type for all sections (Section ${unmapped[0].label} is missing)`, 'error');
-        return;
-      }
-    }
+    // Flatten all questions
+    const allQuestions = sectionData.flatMap(s => s.questions);
+    const mcqSections = sectionData.filter(s => s.type === 'mcq');
+    const nonMcqSections = sectionData.filter(s => s.type !== 'mcq');
+
+    // Build combined marking key from MCQ sections
+    const combinedMarkingKey = mcqSections.map(s => s.markingKey || '').join('');
+    const totalMcqCount = mcqSections.reduce((sum, s) => sum + s.questions.length, 0);
 
     showToast('Question type saved', 'success');
     navigation.navigate('ReviewTest', {
       ...testData,
       questionType,
-      mcqCount: questionType === 'mixed' ? (numericMcqCount || null) : undefined,
-      mcqOptions: questionType === 'multiple-choice' || questionType === 'mixed' ? mcqOptions : undefined,
-      markingKey: questionType === 'multiple-choice' || questionType === 'mixed' ? markingKey : undefined,
-      questionTexts: (questionType === 'essay' || questionType === 'mixed') ? questionTexts : undefined,
-      paperImages: paperImages.length > 0 ? paperImages : undefined,
-      extractedQuestions: extractedQuestions.length > 0 ? extractedQuestions : undefined,
-      extractedSections: extractedSections.length > 0 ? extractedSections : undefined,
-      sectionMapping: sectionMapping.length > 0 ? sectionMapping : undefined,
-      selectedSectionTypes: selectedSections.length > 0 ? selectedSections : undefined,
+      mcqCount: totalMcqCount || undefined,
+      mcqOptions: mcqSections.length > 0 ? mcqSections[0].mcqOptions : mcqOptions,
+      markingKey: combinedMarkingKey || undefined,
+      extractedQuestions: allQuestions.length > 0 ? allQuestions : undefined,
+      sectionData,
+      questionTexts: nonMcqSections.flatMap(s => s.questions.map(q => q.text)),
     });
   };
 
-  const showPaperUpload = questionType === 'essay' || questionType === 'mixed';
-  
   return (
     <View style={styles.container}>
       <Header
@@ -357,9 +416,16 @@ export default function QuestionTypeScreen({ navigation, route }) {
                 style={[
                   styles.option,
                   questionType === 'mixed' && styles.optionSelected,
+                  !isAdmin && styles.optionDisabled,
                 ]}
-                onPress={() => setQuestionType('mixed')}
-                activeOpacity={0.7}
+                onPress={() => {
+                  if (!isAdmin) {
+                    showToast('Mixed questions coming soon!', 'info');
+                    return;
+                  }
+                  setQuestionType('mixed');
+                }}
+                activeOpacity={isAdmin ? 0.7 : 0.5}
               >
                 <View style={styles.optionIcon}>
                   <Ionicons 
@@ -368,321 +434,388 @@ export default function QuestionTypeScreen({ navigation, route }) {
                     color={questionType === 'mixed' ? colors.secondary : colors.textLight} 
                   />
                 </View>
-                <View style={styles.optionContent}>
-                  <Text style={[
-                    styles.optionTitle,
-                    questionType === 'mixed' && styles.optionTitleSelected,
-                  ]}>
-                    Mixed
-                  </Text>
-                  <Text style={styles.optionDescription}>
+                <View style={[styles.optionContent, { flex: 1 }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Text style={[
+                      styles.optionTitle,
+                      questionType === 'mixed' && styles.optionTitleSelected,
+                      !isAdmin && { color: colors.textLight },
+                    ]}>
+                      Mixed
+                    </Text>
+                    {!isAdmin && (
+                      <View style={{ marginLeft: 8, backgroundColor: '#f59e0b', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 }}>
+                        <Text style={{ fontSize: 10, fontWeight: '700', color: '#fff' }}>COMING SOON</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={[styles.optionDescription, !isAdmin && { color: colors.textLight }]}>
                     Combination of multiple choice and essay questions
                   </Text>
                 </View>
-                {questionType === 'mixed' && (
+                {questionType === 'mixed' && isAdmin && (
                   <Ionicons name="checkmark-circle" size={24} color={colors.secondary} />
                 )}
               </TouchableOpacity>
             </View>
 
-            {/* ── Question Paper Upload ── */}
-            {showPaperUpload && (
+            {/* ── Direct MCQ Setup (no sections needed) ── */}
+            {questionType === 'multiple-choice' && (
               <View style={{ marginTop: 20 }}>
                 <Text style={[typography.h4, { color: colors.text, marginBottom: 4 }]}>
-                  Question Paper
+                  MCQ Setup
                 </Text>
                 <Text style={[typography.bodySmall, { color: colors.textSecondary, marginBottom: 12 }]}>
-                  Upload photos of the question paper so we can extract the questions.
+                  Set up the marking key. Students will be scanned one at a time during grading.
                 </Text>
 
-                {/* Section mapping */}
-                <Text style={[typography.bodySmall, { color: colors.text, fontWeight: '600', marginBottom: 8 }]}>
-                  Define your paper sections
-                </Text>
-                <Text style={[typography.caption, { color: colors.textSecondary, marginBottom: 10 }]}>
-                  Specify which section has which type of questions (e.g., Section A = MCQs, Section B = Essay)
-                </Text>
+                <Card style={styles.extractedCard}>
+                  <Input
+                    label="Number of Questions"
+                    value={directMcq.questionCount}
+                    onChangeText={(txt) => setDirectMcq(prev => ({ ...prev, questionCount: txt.replace(/[^0-9]/g, '') }))}
+                    placeholder="e.g., 20"
+                    keyboardType="number-pad"
+                  />
 
-                {sectionMapping.map((section, index) => (
-                  <View key={index} style={styles.sectionMapRow}>
-                    <View style={styles.sectionMapLabel}>
-                      <Text style={styles.sectionMapLabelText}>Section {section.label}</Text>
-                    </View>
-                    <View style={styles.sectionMapPicker}>
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
-                        {SECTION_TYPES.map((st) => {
-                          const active = section.type === st.key;
-                          return (
-                            <TouchableOpacity
-                              key={st.key}
-                              style={[styles.sectionTypeChip, active && styles.sectionTypeChipActive]}
-                              onPress={() => updateSectionType(index, st.key)}
-                              activeOpacity={0.7}
-                            >
-                              <Ionicons name={st.icon} size={14} color={active ? '#fff' : colors.textSecondary} />
-                              <Text style={[styles.sectionTypeChipText, active && styles.sectionTypeChipTextActive]}>
-                                {st.label}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </ScrollView>
-                    </View>
-                    <TouchableOpacity onPress={() => removeSectionMapping(index)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                      <Ionicons name="close-circle" size={20} color={colors.error} />
-                    </TouchableOpacity>
-                  </View>
-                ))}
-
-                <TouchableOpacity style={styles.addSectionBtn} onPress={addSectionMapping} activeOpacity={0.7}>
-                  <Ionicons name="add-circle-outline" size={20} color={colors.secondary} />
-                  <Text style={[typography.bodySmall, { color: colors.secondary, fontWeight: '600', marginLeft: 6 }]}>
-                    Add Section
+                  <Text style={[typography.caption, { color: colors.text, fontWeight: '600', marginBottom: 6 }]}>
+                    Options per question
                   </Text>
-                </TouchableOpacity>
-
-                {/* Paper image thumbnails */}
-                {paperImages.length > 0 && (
-                  <View style={styles.thumbRow}>
-                    {paperImages.map((uri, i) => (
-                      <View key={i} style={styles.thumbWrap}>
-                        <Image source={{ uri }} style={styles.thumb} resizeMode="cover" />
+                  <View style={styles.mcqOptionsRow}>
+                    {[3, 4, 5, 6].map((n) => {
+                      const letter = String.fromCharCode(64 + n);
+                      const active = (directMcq.mcqOptions || 4) === n;
+                      return (
                         <TouchableOpacity
-                          style={styles.thumbRemove}
-                          onPress={() => removePaperImage(i)}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                          <Ionicons name="close-circle" size={20} color={colors.error} />
-                        </TouchableOpacity>
-                        <Text style={styles.thumbLabel}>Page {i + 1}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-
-                {/* Upload buttons */}
-                <View style={styles.uploadRow}>
-                  <TouchableOpacity style={styles.uploadBtn} onPress={handleTakePhoto} activeOpacity={0.7}>
-                    <Ionicons name="camera-outline" size={22} color={colors.secondary} />
-                    <Text style={styles.uploadBtnText}>Take Photo</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.uploadBtn} onPress={handlePickFromGallery} activeOpacity={0.7}>
-                    <Ionicons name="images-outline" size={22} color={colors.secondary} />
-                    <Text style={styles.uploadBtnText}>Gallery</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Extract button */}
-                {paperImages.length > 0 && !extractionDone && (
-                  <TouchableOpacity
-                    style={[styles.extractBtn, extracting && { opacity: 0.6 }]}
-                    onPress={handleExtractQuestions}
-                    disabled={extracting}
-                    activeOpacity={0.7}
-                  >
-                    {extracting ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <Ionicons name="sparkles" size={20} color="#fff" />
-                    )}
-                    <Text style={styles.extractBtnText}>
-                      {extracting ? 'Reading Paper...' : 'Extract Questions'}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-
-                {/* Extraction status */}
-                {extractionMsg ? (
-                  <View style={[styles.extractStatus, {
-                    backgroundColor: extractionDone && extractedQuestions.length > 0
-                      ? colors.success + '15'
-                      : extracting
-                      ? colors.info + '15'
-                      : colors.warning + '15',
-                  }]}>
-                    <Ionicons
-                      name={extractionDone && extractedQuestions.length > 0 ? 'checkmark-circle' : extracting ? 'hourglass-outline' : 'alert-circle'}
-                      size={18}
-                      color={extractionDone && extractedQuestions.length > 0 ? colors.success : extracting ? colors.info : colors.warning}
-                    />
-                    <Text style={[styles.extractStatusText, {
-                      color: extractionDone && extractedQuestions.length > 0 ? colors.success : extracting ? colors.info : colors.warning,
-                    }]}>{extractionMsg}</Text>
-                  </View>
-                ) : null}
-
-                {/* Extracted sections summary */}
-                {extractedSections.length > 0 && (
-                  <Card style={styles.extractedCard}>
-                    <Text style={[typography.h4, { color: colors.text, marginBottom: 8 }]}>Detected Sections</Text>
-                    {extractedSections.map((s, i) => (
-                      <View key={i} style={styles.extractedRow}>
-                        <Ionicons name="document-outline" size={16} color={colors.secondary} />
-                        <Text style={styles.extractedRowText}>
-                          {s.label} — {s.type} (Q{s.questionRange})
-                        </Text>
-                      </View>
-                    ))}
-                  </Card>
-                )}
-
-                {/* Extracted questions preview */}
-                {extractedQuestions.length > 0 && (
-                  <Card style={styles.extractedCard}>
-                    <Text style={[typography.h4, { color: colors.text, marginBottom: 8 }]}>
-                      Extracted Questions ({extractedQuestions.length})
-                    </Text>
-                    {extractedQuestions.slice(0, 15).map((q, i) => (
-                      <View key={i} style={styles.extractedQRow}>
-                        <View style={[styles.qTypeBadge, { backgroundColor: colors.secondary + '20' }]}>
-                          <Text style={[styles.qTypeBadgeText, { color: colors.secondary }]}>
-                            {q.type === 'mcq' ? 'MCQ' : q.type === 'fill_in_blank' ? 'Fill' : q.type === 'diagram' ? 'Diagram' : q.type === 'calculation' ? 'Calc' : q.type === 'comprehension' ? 'Comp' : q.type === 'essay' ? 'Essay' : 'Short'}
-                          </Text>
-                        </View>
-                        {q.section && (
-                          <View style={[styles.qSectionBadge, { backgroundColor: colors.primary + '15' }]}>
-                            <Text style={[styles.qTypeBadgeText, { color: colors.primary }]}>
-                              {q.section}
-                            </Text>
-                          </View>
-                        )}
-                        <Text style={styles.extractedQText} numberOfLines={2}>
-                          Q{q.number}. {q.text}
-                        </Text>
-                        {q.maxPoints > 0 && (
-                          <Text style={styles.extractedQPts}>{q.maxPoints}pts</Text>
-                        )}
-                      </View>
-                    ))}
-                    {extractedQuestions.length > 15 && (
-                      <Text style={[typography.caption, { color: colors.textLight, marginTop: 4 }]}>
-                        + {extractedQuestions.length - 15} more questions
-                      </Text>
-                    )}
-                  </Card>
-                )}
-
-                {/* Retry extraction */}
-                {extractionDone && (
-                  <TouchableOpacity
-                    style={styles.retryLink}
-                    onPress={() => { setExtractionDone(false); setExtractedQuestions([]); setExtractedSections([]); setExtractionMsg(''); }}
-                  >
-                    <Ionicons name="refresh" size={16} color={colors.secondary} />
-                    <Text style={[typography.bodySmall, { color: colors.secondary, marginLeft: 4 }]}>Re-extract</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            )}
-
-            {/* Manual question entry — for non-MCQ types, or when no extraction done */}
-            {(questionType === 'essay' || questionType === 'mixed') && !extractionDone && paperImages.length === 0 && (
-              <View style={{ marginTop: 16 }}>
-                <Text style={[typography.h4, { color: colors.text, marginBottom: 4 }]}>
-                  {questionType === 'mixed' ? 'Type Questions (except MCQs)' : 'Type Your Questions'}
-                </Text>
-                <Text style={[typography.bodySmall, { color: colors.textSecondary, marginBottom: 12 }]}>
-                  Or upload a photo of the question paper above instead.
-                </Text>
-                {questionTexts.map((txt, i) => {
-                  const qNum = questionType === 'mixed' ? (parseInt(mcqCount, 10) || 0) + i + 1 : i + 1;
-                  return (
-                    <View key={`manual-q-${i}`} style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 }}>
-                      <View style={{ flex: 1 }}>
-                        <Input
-                          label={`Question ${qNum}`}
-                          value={txt || ''}
-                          onChangeText={(v) => handleQuestionTextChange(i, v)}
-                          placeholder="e.g., Explain the causes of..."
-                          multiline
-                        />
-                      </View>
-                      {questionTexts.length > 1 && (
-                        <TouchableOpacity
-                          style={{ marginLeft: 4, marginTop: 28, padding: 4 }}
+                          key={n}
+                          style={[styles.mcqOptionChip, active && styles.mcqOptionChipActive]}
                           onPress={() => {
-                            setQuestionTexts(prev => prev.filter((_, idx) => idx !== i));
+                            const newRegex = new RegExp(`[^A-${letter}]`, 'g');
+                            setDirectMcq(prev => ({ ...prev, mcqOptions: n, markingKey: (prev.markingKey || '').replace(newRegex, '') }));
                           }}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          activeOpacity={0.7}
                         >
-                          <Ionicons name="trash-outline" size={18} color={colors.error} />
+                          <Text style={[styles.mcqOptionChipText, active && styles.mcqOptionChipTextActive]}>A-{letter}</Text>
                         </TouchableOpacity>
-                      )}
+                      );
+                    })}
+                  </View>
+
+                  <Input
+                    label={`Marking Key${directMcq.questionCount ? ` (${directMcq.questionCount} answers)` : ''}`}
+                    value={directMcq.markingKey}
+                    onChangeText={handleDirectKeyChange}
+                    placeholder={`e.g., ${'ABCD'.slice(0, directMcq.mcqOptions || 4).repeat(3).slice(0, 8)}...`}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                  />
+                  {directMcq.questionCount ? (
+                    <Text style={{ ...typography.caption, color: directMcq.markingKey?.length === parseInt(directMcq.questionCount, 10) ? colors.success : colors.textSecondary, marginTop: -10, marginBottom: 8 }}>
+                      {directMcq.markingKey?.length || 0} / {directMcq.questionCount} answers entered
+                    </Text>
+                  ) : (
+                    <Text style={{ ...typography.caption, color: colors.textSecondary, marginTop: -10, marginBottom: 8 }}>
+                      Enter number of questions first.
+                    </Text>
+                  )}
+
+                  {directMcq.markingKey?.length === parseInt(directMcq.questionCount, 10) && parseInt(directMcq.questionCount, 10) > 0 && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+                      <Text style={[typography.caption, { color: colors.success }]}>Marking key complete. Ready to grade students.</Text>
                     </View>
-                  );
-                })}
-                <TouchableOpacity
-                  style={styles.addSectionBtn}
-                  onPress={() => setQuestionTexts(prev => [...prev, ''])}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="add-circle-outline" size={20} color={colors.secondary} />
-                  <Text style={[typography.bodySmall, { color: colors.secondary, fontWeight: '600', marginLeft: 6 }]}>
-                    Add Question
-                  </Text>
-                </TouchableOpacity>
+                  )}
+                </Card>
               </View>
             )}
 
-            {(questionType === 'multiple-choice' || (questionType === 'mixed' && (sectionMapping.length === 0 || sectionMapping.some(s => s.type === 'mcq')))) && (
-              <View style={{ marginTop: 8 }}>
-                {questionType === 'mixed' && (
-                  <View style={{ marginBottom: 12 }}>
-                    <Input
-                      label={`Number of MCQs${expectedCount ? ` (max ${expectedCount})` : ''}`}
-                      value={String(mcqCount)}
-                      onChangeText={handleMcqCountChange}
-                      placeholder={expectedCount ? `e.g., ${Math.min(10, expectedCount)}` : 'e.g., 10'}
-                      keyboardType="number-pad"
-                    />
-                  </View>
-                )}
-
-                {/* MCQ Options selector */}
-                <Text style={[typography.bodySmall, { color: colors.text, fontWeight: '600', marginBottom: 8 }]}>
-                  How many options per question?
+            {/* ── Per-Section Setup (essay/mixed only) ── */}
+            {(questionType === 'essay' || questionType === 'mixed') && (
+              <View style={{ marginTop: 20 }}>
+                <Text style={[typography.h4, { color: colors.text, marginBottom: 4 }]}>
+                  Define Sections
                 </Text>
-                <View style={styles.mcqOptionsRow}>
-                  {[3, 4, 5, 6, 7, 8].map((n) => {
-                    const letter = String.fromCharCode(64 + n);
-                    const active = mcqOptions === n;
-                    return (
+                <Text style={[typography.bodySmall, { color: colors.textSecondary, marginBottom: 12 }]}>
+                  Add each section of your paper, upload its photos, and extract the questions.
+                </Text>
+
+                {sections.map((section, sIdx) => {
+                  const isExpanded = expandedSection === sIdx;
+                  const sectionDone = section.extractionDone && section.questions.length > 0;
+                  const sectionHasManual = section.manualQuestions.some(q => q && q.trim());
+                  const mcqExpected = parseInt(section.mcqQuestionCount, 10) || 0;
+                  const mcqReady = section.type === 'mcq' && mcqExpected > 0 && section.markingKey?.length === mcqExpected;
+                  const sectionReady = mcqReady || sectionDone || sectionHasManual;
+                  const typeLabel = ALL_SECTION_TYPES.find(t => t.key === section.type)?.label || 'Not set';
+                  const secMaxLetter = String.fromCharCode(64 + (section.mcqOptions || 4));
+
+                  return (
+                    <Card key={sIdx} style={[styles.extractedCard, sectionReady && { borderColor: colors.success, borderWidth: 1 }]}>
+                      {/* Section header — tap to expand/collapse */}
                       <TouchableOpacity
-                        key={n}
-                        style={[styles.mcqOptionChip, active && styles.mcqOptionChipActive]}
-                        onPress={() => {
-                          setMcqOptions(n);
-                          // Re-filter marking key with new allowed range
-                          const newRegex = new RegExp(`[^A-${letter}]`, 'g');
-                          setMarkingKey((prev) => prev.replace(newRegex, ''));
-                        }}
+                        style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                        onPress={() => setExpandedSection(isExpanded ? -1 : sIdx)}
                         activeOpacity={0.7}
                       >
-                        <Text style={[styles.mcqOptionChipText, active && styles.mcqOptionChipTextActive]}>
-                          A-{letter}
-                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
+                          <View style={styles.sectionMapLabel}>
+                            <Text style={styles.sectionMapLabelText}>Section {section.label}</Text>
+                          </View>
+                          <Text style={[typography.bodySmall, { color: colors.textSecondary }]}>{typeLabel}</Text>
+                          {sectionReady && <Ionicons name="checkmark-circle" size={18} color={colors.success} />}
+                        </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <TouchableOpacity onPress={() => removeSection(sIdx)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Ionicons name="trash-outline" size={18} color={colors.error} />
+                          </TouchableOpacity>
+                          <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={20} color={colors.textLight} />
+                        </View>
                       </TouchableOpacity>
-                    );
-                  })}
-                </View>
 
-                <Input
-                  label={`MCQ Marking Key${questionType === 'multiple-choice' ? (expectedCount ? ` (${expectedCount} answers)` : '') : (numericMcqCount ? ` (${numericMcqCount} answers)` : '')}`}
-                  value={markingKey}
-                  onChangeText={handleKeyChange}
-                  placeholder={(questionType === 'multiple-choice')
-                    ? (expectedCount ? 'e.g., ' + mcqLetterRange.repeat(Math.ceil(expectedCount/mcqOptions)).slice(0, expectedCount) : 'e.g., ' + mcqLetterRange.repeat(2))
-                    : (numericMcqCount ? ('e.g., ' + mcqLetterRange.repeat(Math.ceil(numericMcqCount/mcqOptions)).slice(0, numericMcqCount)) : 'Enter number of MCQs first')}
-                  autoCapitalize="characters"
-                  autoCorrect={false}
-                  editable={questionType === 'multiple-choice' ? true : !!numericMcqCount}
-                  error={(questionType === 'multiple-choice')
-                    ? (expectedCount && markingKey && markingKey.length !== expectedCount ? `Must be ${expectedCount} answers` : '')
-                    : (numericMcqCount && markingKey && markingKey.length !== numericMcqCount ? `Must be ${numericMcqCount} answers` : '')}
-                />
-                <Text style={{ ...typography.caption, color: colors.textSecondary, marginTop: -12 }}>
-                  Use letters A-{mcqMaxLetter} only, one per question
-                </Text>
+                      {isExpanded && (
+                        <View style={{ marginTop: 14 }}>
+                          {/* Section type picker */}
+                          <Text style={[typography.caption, { color: colors.text, fontWeight: '600', marginBottom: 6 }]}>Question Type</Text>
+                          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, marginBottom: 14 }}>
+                            {(questionType === 'essay' ? ESSAY_SECTION_TYPES : ALL_SECTION_TYPES).map((st) => {
+                              const active = section.type === st.key;
+                              return (
+                                <TouchableOpacity
+                                  key={st.key}
+                                  style={[styles.sectionTypeChip, active && styles.sectionTypeChipActive]}
+                                  onPress={() => updateSection(sIdx, { type: st.key })}
+                                  activeOpacity={0.7}
+                                >
+                                  <Ionicons name={st.icon} size={14} color={active ? '#fff' : colors.textSecondary} />
+                                  <Text style={[styles.sectionTypeChipText, active && styles.sectionTypeChipTextActive]}>{st.label}</Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </ScrollView>
+
+                          {/* Section body — different layout for MCQ vs non-MCQ */}
+                          {section.type === 'mcq' ? (
+                            <>
+                              {/* ── MCQ Section: count → options → key → answer sheet ── */}
+                              <Input
+                                label="Number of Questions"
+                                value={section.mcqQuestionCount}
+                                onChangeText={(txt) => {
+                                  const num = txt.replace(/[^0-9]/g, '');
+                                  updateSection(sIdx, { mcqQuestionCount: num });
+                                }}
+                                placeholder="e.g., 20"
+                                keyboardType="number-pad"
+                              />
+
+                              <Text style={[typography.caption, { color: colors.text, fontWeight: '600', marginBottom: 6 }]}>
+                                Options per question
+                              </Text>
+                              <View style={styles.mcqOptionsRow}>
+                                {[3, 4, 5, 6].map((n) => {
+                                  const letter = String.fromCharCode(64 + n);
+                                  const active = (section.mcqOptions || 4) === n;
+                                  return (
+                                    <TouchableOpacity
+                                      key={n}
+                                      style={[styles.mcqOptionChip, active && styles.mcqOptionChipActive]}
+                                      onPress={() => {
+                                        const newRegex = new RegExp(`[^A-${letter}]`, 'g');
+                                        updateSection(sIdx, { mcqOptions: n, markingKey: (section.markingKey || '').replace(newRegex, '') });
+                                      }}
+                                      activeOpacity={0.7}
+                                    >
+                                      <Text style={[styles.mcqOptionChipText, active && styles.mcqOptionChipTextActive]}>A-{letter}</Text>
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                              </View>
+
+                              <Input
+                                label={`Marking Key${section.mcqQuestionCount ? ` (${section.mcqQuestionCount} answers)` : ''}`}
+                                value={section.markingKey}
+                                onChangeText={(txt) => handleSectionKeyChange(sIdx, txt)}
+                                placeholder={`e.g., ${'ABCD'.slice(0, section.mcqOptions || 4).repeat(3).slice(0, 8)}...`}
+                                autoCapitalize="characters"
+                                autoCorrect={false}
+                              />
+                              {section.mcqQuestionCount ? (
+                                <Text style={{ ...typography.caption, color: section.markingKey?.length === parseInt(section.mcqQuestionCount, 10) ? colors.success : colors.textSecondary, marginTop: -10 }}>
+                                  {section.markingKey?.length || 0} / {section.mcqQuestionCount} answers entered
+                                </Text>
+                              ) : (
+                                <Text style={{ ...typography.caption, color: colors.textSecondary, marginTop: -10 }}>
+                                  Enter number of questions first, then type one letter (A-{secMaxLetter}) per question.
+                                </Text>
+                              )}
+
+                              {section.markingKey?.length === parseInt(section.mcqQuestionCount, 10) && parseInt(section.mcqQuestionCount, 10) > 0 && (
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
+                                  <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+                                  <Text style={[typography.caption, { color: colors.success }]}>Marking key complete. Students will be scanned during grading.</Text>
+                                </View>
+                              )}
+                            </>
+                          ) : section.type ? (
+                            <>
+                              {/* ── Sub-types: optional extras in this section ── */}
+                              <Text style={[typography.caption, { color: colors.text, fontWeight: '600', marginBottom: 8 }]}>
+                                This section also includes: <Text style={{ color: colors.textSecondary, fontWeight: '400' }}>(optional)</Text>
+                              </Text>
+                              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginBottom: 16 }}>
+                                {SECTION_SUB_TYPES.map((sub) => {
+                                  const active = !!section[sub.key];
+                                  return (
+                                    <TouchableOpacity
+                                      key={sub.key}
+                                      style={[styles.sectionTypeChip, active && styles.sectionTypeChipActive, { flexDirection: 'row', alignItems: 'center', gap: 5 }]}
+                                      onPress={() => updateSection(sIdx, { [sub.key]: !active })}
+                                      activeOpacity={0.7}
+                                    >
+                                      <Ionicons name={active ? 'checkbox' : 'square-outline'} size={14} color={active ? '#fff' : colors.textSecondary} />
+                                      <Ionicons name={sub.icon} size={13} color={active ? '#fff' : colors.textSecondary} />
+                                      <Text style={[styles.sectionTypeChipText, active && styles.sectionTypeChipTextActive]}>{sub.label}</Text>
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                              </ScrollView>
+
+                              {/* ── Non-MCQ Section: Upload question paper + extract ── */}
+                              <Text style={[typography.caption, { color: colors.text, fontWeight: '600', marginBottom: 6 }]}>
+                                Upload Section {section.label} Question Paper
+                              </Text>
+
+                              {section.images.length > 0 && (
+                                <View style={styles.thumbRow}>
+                                  {section.images.map((uri, imgI) => (
+                                    <View key={imgI} style={styles.thumbWrap}>
+                                      <Image source={{ uri }} style={styles.thumb} resizeMode="cover" />
+                                      <TouchableOpacity style={styles.thumbRemove} onPress={() => removeSectionImage(sIdx, imgI)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                        <Ionicons name="close-circle" size={20} color={colors.error} />
+                                      </TouchableOpacity>
+                                      <Text style={styles.thumbLabel}>Page {imgI + 1}</Text>
+                                    </View>
+                                  ))}
+                                </View>
+                              )}
+
+                              <View style={styles.uploadRow}>
+                                <TouchableOpacity style={styles.uploadBtn} onPress={() => handleSectionTakePhoto(sIdx)} activeOpacity={0.7}>
+                                  <Ionicons name="camera-outline" size={20} color={colors.secondary} />
+                                  <Text style={[styles.uploadBtnText, { fontSize: 13 }]}>Camera</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.uploadBtn} onPress={() => handleSectionPickGallery(sIdx)} activeOpacity={0.7}>
+                                  <Ionicons name="images-outline" size={20} color={colors.secondary} />
+                                  <Text style={[styles.uploadBtnText, { fontSize: 13 }]}>Gallery</Text>
+                                </TouchableOpacity>
+                              </View>
+
+                              {/* Extract button */}
+                              {section.images.length > 0 && !section.extractionDone && (
+                                <TouchableOpacity
+                                  style={[styles.extractBtn, section.extracting && { opacity: 0.6 }]}
+                                  onPress={() => handleSectionExtract(sIdx)}
+                                  disabled={section.extracting}
+                                  activeOpacity={0.7}
+                                >
+                                  {section.extracting ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="sparkles" size={18} color="#fff" />}
+                                  <Text style={styles.extractBtnText}>{section.extracting ? 'Reading...' : 'Extract Questions'}</Text>
+                                </TouchableOpacity>
+                              )}
+
+                              {/* Extraction status */}
+                              {section.extractionMsg ? (
+                                <View style={[styles.extractStatus, {
+                                  backgroundColor: sectionDone ? colors.success + '15' : section.extracting ? colors.info + '15' : colors.warning + '15',
+                                }]}>
+                                  <Ionicons
+                                    name={sectionDone ? 'checkmark-circle' : section.extracting ? 'hourglass-outline' : 'alert-circle'}
+                                    size={16}
+                                    color={sectionDone ? colors.success : section.extracting ? colors.info : colors.warning}
+                                  />
+                                  <Text style={[styles.extractStatusText, {
+                                    color: sectionDone ? colors.success : section.extracting ? colors.info : colors.warning,
+                                  }]}>{section.extractionMsg}</Text>
+                                </View>
+                              ) : null}
+
+                              {/* Extracted questions preview */}
+                              {section.questions.length > 0 && (
+                                <View style={{ marginBottom: 8 }}>
+                                  {section.questions.slice(0, 8).map((q, qi) => (
+                                    <View key={qi} style={styles.extractedQRow}>
+                                      <View style={[styles.qTypeBadge, { backgroundColor: colors.secondary + '20' }]}>
+                                        <Text style={[styles.qTypeBadgeText, { color: colors.secondary }]}>Q{q.number}</Text>
+                                      </View>
+                                      <Text style={styles.extractedQText} numberOfLines={1}>{q.text}</Text>
+                                      {q.maxPoints > 0 && <Text style={styles.extractedQPts}>{q.maxPoints}pts</Text>}
+                                    </View>
+                                  ))}
+                                  {section.questions.length > 8 && (
+                                    <Text style={[typography.caption, { color: colors.textLight }]}>+ {section.questions.length - 8} more</Text>
+                                  )}
+                                </View>
+                              )}
+
+                              {/* Retry */}
+                              {section.extractionDone && (
+                                <TouchableOpacity style={styles.retryLink} onPress={() => updateSection(sIdx, { extractionDone: false, questions: [], extractionMsg: '' })}>
+                                  <Ionicons name="refresh" size={14} color={colors.secondary} />
+                                  <Text style={[typography.caption, { color: colors.secondary, marginLeft: 4 }]}>Re-extract</Text>
+                                </TouchableOpacity>
+                              )}
+
+                              {/* Manual question entry — when no images uploaded */}
+                              {section.images.length === 0 && !section.extractionDone && (
+                                <View style={{ marginTop: 8 }}>
+                                  <Text style={[typography.caption, { color: colors.textSecondary, marginBottom: 6 }]}>
+                                    Or type questions manually:
+                                  </Text>
+                                  {section.manualQuestions.map((txt, qIdx) => (
+                                    <View key={qIdx} style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6 }}>
+                                      <View style={{ flex: 1 }}>
+                                        <Input
+                                          label={`Q${qIdx + 1}`}
+                                          value={txt}
+                                          onChangeText={(v) => handleSectionManualChange(sIdx, qIdx, v)}
+                                          placeholder="Type the question..."
+                                          multiline
+                                        />
+                                      </View>
+                                      {section.manualQuestions.length > 1 && (
+                                        <TouchableOpacity style={{ marginLeft: 4, marginTop: 24, padding: 4 }} onPress={() => removeSectionManualQuestion(sIdx, qIdx)}>
+                                          <Ionicons name="trash-outline" size={16} color={colors.error} />
+                                        </TouchableOpacity>
+                                      )}
+                                    </View>
+                                  ))}
+                                  <TouchableOpacity style={styles.addSectionBtn} onPress={() => addSectionManualQuestion(sIdx)} activeOpacity={0.7}>
+                                    <Ionicons name="add-circle-outline" size={18} color={colors.secondary} />
+                                    <Text style={[typography.caption, { color: colors.secondary, fontWeight: '600', marginLeft: 4 }]}>Add Question</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              )}
+                            </>
+                          ) : (
+                            <Text style={[typography.caption, { color: colors.warning, fontStyle: 'italic' }]}>
+                              Select a question type above first
+                            </Text>
+                          )}
+                        </View>
+                      )}
+                    </Card>
+                  );
+                })}
+
+                {/* Add section button */}
+                {sections.length < 10 && (
+                  <TouchableOpacity style={styles.addSectionBtn} onPress={addSection} activeOpacity={0.7}>
+                    <Ionicons name="add-circle-outline" size={22} color={colors.secondary} />
+                    <Text style={[typography.bodySmall, { color: colors.secondary, fontWeight: '600', marginLeft: 6 }]}>
+                      Add Section {String.fromCharCode(65 + sections.length)}
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </View>
             )}
           </View>
@@ -691,10 +824,14 @@ export default function QuestionTypeScreen({ navigation, route }) {
         <AnimatedScreen delay={120}>
           <View style={styles.actions}>
             <Button
-              title="Continue"
+              title={questionType === 'multiple-choice'
+                ? 'Continue'
+                : sections.length > 0 ? `Continue (${sections.length} section${sections.length > 1 ? 's' : ''})` : 'Continue'}
               onPress={handleContinue}
               variant="primary"
-              disabled={!questionType}
+              disabled={!questionType || (questionType === 'multiple-choice'
+                ? (!directMcq.questionCount || !directMcq.markingKey || directMcq.markingKey.length !== parseInt(directMcq.questionCount, 10))
+                : sections.length === 0)}
             />
           </View>
         </AnimatedScreen>
@@ -746,6 +883,9 @@ const makeStyles = (colors) => StyleSheet.create({
   optionSelected: {
     borderColor: colors.secondary,
     backgroundColor: colors.secondaryLight + '10',
+  },
+  optionDisabled: {
+    opacity: 0.6,
   },
   optionIcon: {
     marginRight: 16,

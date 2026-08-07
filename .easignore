@@ -1,0 +1,19 @@
+# Files and folders to exclude from EAS Build upload
+# Falls back to .gitignore if this file is absent. Keeping explicit for clarity.
+
+# Do not upload backend python service code
+backend/
+supabase/
+docs/
+.github/
+*.md
+
+# Common local caches and build outputs (already in .gitignore, repeated here for certainty)
+node_modules/
+.expo/
+web-build/
+dist/
+.vscode/
+.env
+.env.*
+!.env.example

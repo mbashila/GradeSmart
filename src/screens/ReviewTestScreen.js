@@ -19,13 +19,24 @@ export default function ReviewTestScreen({ navigation, route }) {
   const { showToast } = useToast();
   const { addTest } = useTests();
   
+  // Detect if all sections are MCQ-only
+  const sectionData = testData?.sectionData || [];
+  const isMcqOnly = sectionData.length > 0 && sectionData.every(s => s.type === 'mcq');
+
   const handleStartScanning = () => {
     const testId = testData?.id || route?.params?.testId || Date.now().toString();
+    const fullTestData = { ...testData, id: testId };
     try {
       addTest({ id: testId, ...testData });
     } catch {}
     showToast('Review confirmed', 'success');
-    navigation.navigate('Scan', { testData: { ...testData, id: testId }, testId });
+
+    if (isMcqOnly) {
+      // MCQ-only: go directly to MCQAnswerInput — it handles its own photo capture
+      navigation.navigate('MCQAnswerInput', { testData: fullTestData, testId });
+    } else {
+      navigation.navigate('Scan', { testData: fullTestData, testId });
+    }
   };
   
   const getQuestionTypeLabel = (type) => {
@@ -144,7 +155,49 @@ export default function ReviewTestScreen({ navigation, route }) {
               );
             })()}
 
-            {(testData?.questionType === 'multiple-choice' || testData?.questionType === 'mixed') && (
+            {/* Section-based summary */}
+            {testData?.sectionData?.length > 0 && testData.sectionData.map((sec, i) => (
+              <View key={i} style={{ marginTop: i === 0 ? 4 : 0, marginBottom: 8 }}>
+                <View style={styles.detailRow}>
+                  <View style={styles.detailIcon}>
+                    <Ionicons
+                      name={sec.type === 'mcq' ? 'radio-button-on' : sec.type === 'essay' ? 'document-text' : sec.type === 'diagram' ? 'image' : 'create'}
+                      size={24}
+                      color={colors.secondary}
+                    />
+                  </View>
+                  <View style={styles.detailContent}>
+                    <Text style={styles.detailLabel}>Section {sec.label}</Text>
+                    <Text style={styles.detailValue}>
+                      {sec.type === 'mcq' ? 'MCQs' : sec.type === 'fill_in_blank' ? 'Fill in Blanks' : sec.type === 'short_notes' ? 'Short Notes' : sec.type === 'comprehension' ? 'Comprehension' : sec.type === 'essay' ? 'Essay' : sec.type === 'diagram' ? 'Diagrams' : sec.type === 'calculation' ? 'Calculations' : sec.type}
+                      {' — '}{sec.questions?.length || 0} question{(sec.questions?.length || 0) !== 1 ? 's' : ''}
+                    </Text>
+                  </View>
+                </View>
+                {sec.type === 'mcq' && sec.markingKey && (
+                  <View style={{ marginLeft: 52, marginBottom: 4 }}>
+                    <Text style={[typography.caption, { color: colors.textSecondary }]}>
+                      Marking Key: <Text style={{ fontWeight: '700', color: colors.text }}>{sec.markingKey}</Text>
+                    </Text>
+                  </View>
+                )}
+                {sec.questions?.length > 0 && sec.type !== 'mcq' && (
+                  <View style={{ marginLeft: 52 }}>
+                    {sec.questions.slice(0, 3).map((q, qi) => (
+                      <Text key={qi} style={[typography.caption, { color: colors.textSecondary, marginBottom: 2 }]} numberOfLines={1}>
+                        Q{q.number}: {q.text}
+                      </Text>
+                    ))}
+                    {sec.questions.length > 3 && (
+                      <Text style={[typography.caption, { color: colors.textLight }]}>+ {sec.questions.length - 3} more</Text>
+                    )}
+                  </View>
+                )}
+              </View>
+            ))}
+
+            {/* Fallback for old-style data without sectionData */}
+            {!testData?.sectionData && (testData?.questionType === 'multiple-choice' || testData?.questionType === 'mixed') && (
               <View style={styles.detailRow}>
                 <View style={styles.detailIcon}>
                   <Ionicons name="key" size={24} color={colors.secondary} />
@@ -153,38 +206,6 @@ export default function ReviewTestScreen({ navigation, route }) {
                   <Text style={styles.detailLabel}>MCQ Marking Key</Text>
                   <Text style={styles.detailValue}>{testData?.markingKey || 'Not set'}</Text>
                 </View>
-              </View>
-            )}
-            {testData?.questionType === 'mixed' && (
-              <View style={styles.detailRow}>
-                <View style={styles.detailIcon}>
-                  <Ionicons name="radio-button-on" size={24} color={colors.secondary} />
-                </View>
-                <View style={styles.detailContent}>
-                  <Text style={styles.detailLabel}>MCQ Questions</Text>
-                  <Text style={styles.detailValue}>{testData?.mcqCount || 0}</Text>
-                </View>
-              </View>
-            )}
-
-            {testData?.questionTexts?.length > 0 && testData.questionTexts.some(q => q?.trim()) && (
-              <View style={{ marginTop: 4, marginBottom: 8 }}>
-                <View style={styles.detailRow}>
-                  <View style={styles.detailIcon}>
-                    <Ionicons name="create" size={24} color={colors.secondary} />
-                  </View>
-                  <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Essay Questions</Text>
-                  </View>
-                </View>
-                {testData.questionTexts.map((q, i) => q?.trim() ? (
-                  <View key={i} style={{ marginLeft: 52, marginBottom: 6 }}>
-                    <Text style={[typography.bodySmall, { color: colors.textSecondary }]}>
-                      Q{(testData.questionType === 'mixed' ? (parseInt(testData.mcqCount, 10) || 0) : 0) + i + 1}:
-                    </Text>
-                    <Text style={[typography.body, { color: colors.text }]}>{q}</Text>
-                  </View>
-                ) : null)}
               </View>
             )}
             </Card>
@@ -219,10 +240,10 @@ export default function ReviewTestScreen({ navigation, route }) {
               style={styles.editButton}
             />
             <Button
-              title="Start Scanning"
+              title={isMcqOnly ? 'Start Grading' : 'Start Scanning'}
               onPress={handleStartScanning}
               variant="primary"
-              icon="📷"
+              icon={isMcqOnly ? '✅' : '📷'}
             />
           </View>
         </AnimatedScreen>

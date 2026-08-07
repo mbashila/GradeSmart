@@ -1,24 +1,35 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import Header from '../components/Header';
 import Button from '../components/Button';
 import Card from '../components/Card';
+import Input from '../components/Input';
 import AnimatedScreen from '../components/AnimatedScreen';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { gradeMCQ } from '../utils/grading';
-import { useGradingServer } from '../context/GradingServerContext';
-import { detectMCQWithServer } from '../utils/gradingServerService';
+import { detectAnswersWithAI, getOpenAIKey } from '../utils/openaiService';
 
 export default function MCQAnswerInputScreen({ navigation, route }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const { images, testData, studentName, studentNumber } = route.params || {};
+  const { images: passedImages, testData, studentName: passedName, studentNumber: passedNum } = route.params || {};
   const markingKey = testData?.markingKey || '';
   const questionCount = markingKey.length || parseInt(testData?.numberOfQuestions, 10) || 0;
   const mcqOptions = testData?.mcqOptions || 4;
   const CHOICES = Array.from({ length: mcqOptions }, (_, i) => String.fromCharCode(65 + i));
+
+  // MCQ-only direct flow = no images passed from Scan screen
+  const isDirectFlow = !passedImages || passedImages.length === 0;
+
+  // Student details (editable in direct flow)
+  const [studentName, setStudentName] = useState(passedName || '');
+  const [studentNumber, setStudentNumber] = useState(passedNum || '');
+
+  // Answer sheet images (captured in direct flow)
+  const [images, setImages] = useState(passedImages || []);
 
   const [answers, setAnswers] = useState(
     Array.from({ length: questionCount }, () => '')
@@ -26,89 +37,82 @@ export default function MCQAnswerInputScreen({ navigation, route }) {
   const [confidence, setConfidence] = useState(
     Array.from({ length: questionCount }, () => 0)
   );
-  const [scanning, setScanning] = useState(true);
-  const [scanMessage, setScanMessage] = useState('Scanning answer sheet...');
+  const [scanning, setScanning] = useState(!isDirectFlow);
+  const [scanMessage, setScanMessage] = useState(isDirectFlow ? '' : 'Scanning answer sheet...');
   const [scanDone, setScanDone] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
-  const { serverStatus } = useGradingServer();
-  const serverOk = serverStatus?.ok;
 
-  // Auto-scan on mount using OpenCV server
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!images?.length || questionCount === 0) {
-        setScanMessage('No image or questions. Enter answers manually.');
-        setScanning(false);
-        setScanDone(true);
-        return;
-      }
+  // ── Photo capture for direct flow ──
+  const handleTakePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') return;
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+    if (!result.canceled && result.assets?.length > 0) {
+      setImages([result.assets[0].uri]);
+    }
+  };
 
-      if (!serverOk) {
-        setScanMessage('Grading server not connected. Enter answers manually.');
-        setScanning(false);
-        setScanDone(true);
-        return;
-      }
+  const handlePickGallery = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets?.length > 0) {
+      setImages([result.assets[0].uri]);
+    }
+  };
 
-      setScanMessage('Sending image to grading server...');
-      try {
-        const result = await detectMCQWithServer(images[0], questionCount);
-        if (cancelled) return;
-        if (result.error) {
-          setScanMessage(`Detection failed: ${result.error}. Correct answers below.`);
-        } else {
-          const newAnswers = result.answers.map((a) => (a === '?' ? '' : a));
-          const newConf = result.confidence || Array.from({ length: questionCount }, () => 0);
-          setAnswers(newAnswers);
-          setConfidence(newConf);
-          const detected = newAnswers.filter((a) => a !== '').length;
-          if (detected === questionCount) {
-            setScanMessage(`All ${questionCount} answers detected! Review and grade.`);
-          } else if (detected > 0) {
-            setScanMessage(`Detected ${detected}/${questionCount}. Fill in the rest below.`);
-          } else {
-            setScanMessage('Could not detect answers. Select manually below.');
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setScanMessage('Server scan failed. Enter answers manually.');
-        }
-      }
-      if (!cancelled) {
-        setScanning(false);
-        setScanDone(true);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  const handleRetry = useCallback(async () => {
-    if (!images?.length || !serverOk) return;
+  // ── AI scan logic ──
+  const runAIScan = useCallback(async (imageUri) => {
+    if (!imageUri || questionCount === 0) {
+      setScanMessage('No image or questions.');
+      return;
+    }
+    const apiKey = await getOpenAIKey();
+    if (!apiKey) {
+      setScanMessage('API key not set. Enter answers manually.');
+      setScanning(false);
+      setScanDone(true);
+      return;
+    }
     setScanning(true);
-    setScanMessage('Retrying scan...');
+    setScanMessage('Reading answer sheet with AI...');
     try {
-      const result = await detectMCQWithServer(images[0], questionCount);
+      const result = await detectAnswersWithAI(imageUri, questionCount, markingKey, mcqOptions);
       if (result.error) {
-        setScanMessage(`Retry failed: ${result.error}`);
+        setScanMessage(`Detection failed: ${result.error}. Correct answers below.`);
       } else {
         const newAnswers = result.answers.map((a) => (a === '?' ? '' : a));
         const newConf = result.confidence || Array.from({ length: questionCount }, () => 0);
         setAnswers(newAnswers);
         setConfidence(newConf);
         const detected = newAnswers.filter((a) => a !== '').length;
-        setScanMessage(detected === questionCount
-          ? `All ${questionCount} answers detected!`
-          : detected > 0
-          ? `Detected ${detected}/${questionCount}.`
-          : 'Could not detect answers.');
+        if (detected === questionCount) {
+          setScanMessage(`All ${questionCount} answers detected! Review and grade.`);
+        } else if (detected > 0) {
+          setScanMessage(`Detected ${detected}/${questionCount}. Fill in the rest below.`);
+        } else {
+          setScanMessage('Could not detect answers. Select manually below.');
+        }
       }
     } catch {
-      setScanMessage('Retry failed. Enter answers manually.');
+      setScanMessage('AI scan failed. Enter answers manually.');
     }
     setScanning(false);
-  }, [images, questionCount, serverOk]);
+    setScanDone(true);
+  }, [questionCount, markingKey, mcqOptions]);
+
+  // Auto-scan when images are available (legacy flow or after capture in direct flow)
+  useEffect(() => {
+    if (images?.length > 0 && !scanDone) {
+      runAIScan(images[0]);
+    }
+  }, [images]);
+
+  const handleRetry = useCallback(async () => {
+    if (!images?.length) return;
+    await runAIScan(images[0]);
+  }, [images, runAIScan]);
 
   const handleSelect = (qIndex, choice) => {
     setAnswers((prev) => {
@@ -141,7 +145,21 @@ export default function MCQAnswerInputScreen({ navigation, route }) {
       percentage: result.percentage,
       gradingResults: result.results,
       gradingType: 'mcq',
+      isDirectFlow,
     });
+  };
+
+  // Reset for next student (direct flow only)
+  const handleNextStudent = () => {
+    setImages([]);
+    setStudentName('');
+    setStudentNumber('');
+    setAnswers(Array.from({ length: questionCount }, () => ''));
+    setConfidence(Array.from({ length: questionCount }, () => 0));
+    setScanning(false);
+    setScanMessage('');
+    setScanDone(false);
+    setShowPreview(false);
   };
 
   // Scanning state — full screen loader
@@ -160,11 +178,74 @@ export default function MCQAnswerInputScreen({ navigation, route }) {
     );
   }
 
+  // ── Direct flow: capture student answer sheet ──
+  if (isDirectFlow && images.length === 0) {
+    return (
+      <View style={styles.container}>
+        <Header title="MCQ Grading" onBack={() => navigation.goBack()} />
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+            <AnimatedScreen>
+              <Text style={styles.title}>Grade Student</Text>
+              <Text style={styles.subtitle}>
+                Enter student details and scan their answer sheet.
+              </Text>
+
+              <Card style={{ marginBottom: 16 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                  <Ionicons name="key-outline" size={18} color={colors.secondary} />
+                  <Text style={[typography.bodySmall, { color: colors.secondary, fontWeight: '600', marginLeft: 6 }]}>
+                    Marking Key: {markingKey.length} questions
+                  </Text>
+                </View>
+                <Text style={[typography.caption, { color: colors.textSecondary, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', letterSpacing: 2 }]}>
+                  {markingKey}
+                </Text>
+              </Card>
+
+              <Input
+                label="Student Name"
+                value={studentName}
+                onChangeText={setStudentName}
+                placeholder="Enter student name"
+                iconName="person-outline"
+                returnKeyType="next"
+              />
+              <Input
+                label="Student Number (optional)"
+                value={studentNumber}
+                onChangeText={setStudentNumber}
+                placeholder="Enter student number"
+                iconName="id-card-outline"
+                returnKeyType="done"
+              />
+
+              <Text style={[typography.caption, { color: colors.text, fontWeight: '600', marginTop: 12, marginBottom: 8 }]}>
+                Scan Answer Sheet
+              </Text>
+              <View style={styles.uploadRow}>
+                <TouchableOpacity style={styles.uploadBtn} onPress={handleTakePhoto} activeOpacity={0.7}>
+                  <Ionicons name="camera-outline" size={28} color={colors.secondary} />
+                  <Text style={[styles.uploadBtnText]}>Camera</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.uploadBtn} onPress={handlePickGallery} activeOpacity={0.7}>
+                  <Ionicons name="images-outline" size={28} color={colors.secondary} />
+                  <Text style={[styles.uploadBtnText]}>Gallery</Text>
+                </TouchableOpacity>
+              </View>
+            </AnimatedScreen>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </View>
+    );
+  }
+
+  // ── Answer review & grading ──
   return (
     <View style={styles.container}>
       <Header
-        title="MCQ Answers"
-        onBack={() => navigation.goBack()}
+        title={isDirectFlow ? `Grading: ${studentName || 'Student'}` : 'MCQ Answers'}
+        onBack={() => isDirectFlow ? handleNextStudent() : navigation.goBack()}
         rightIcon={showPreview ? 'close-circle-outline' : 'image-outline'}
         onRightPress={() => setShowPreview(!showPreview)}
       />
@@ -187,8 +268,8 @@ export default function MCQAnswerInputScreen({ navigation, route }) {
             <Text style={styles.statusText}>{scanMessage}</Text>
           </View>
 
-          {/* Retry button if server is available */}
-          {serverOk && (
+          {/* Retry button */}
+          {scanDone && images?.length > 0 && (
             <TouchableOpacity
               style={styles.retryBtn}
               onPress={handleRetry}
@@ -208,7 +289,7 @@ export default function MCQAnswerInputScreen({ navigation, route }) {
 
           <Text style={styles.title}>Review Answers</Text>
           <Text style={styles.subtitle}>
-            Tap A/B/C/D to correct any answer. Marking key will be compared automatically.
+            Tap {CHOICES.join('/')} to correct any answer. Marking key will be compared automatically.
           </Text>
           <Text style={styles.progress}>
             {answeredCount} / {questionCount} answered
@@ -444,5 +525,27 @@ const makeStyles = (colors) => StyleSheet.create({
   },
   actions: {
     marginTop: 16,
+  },
+  uploadRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  uploadBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderStyle: 'dashed',
+    backgroundColor: colors.surfaceLight,
+  },
+  uploadBtnText: {
+    ...typography.caption,
+    color: colors.secondary,
+    fontWeight: '600',
+    marginTop: 6,
   },
 });

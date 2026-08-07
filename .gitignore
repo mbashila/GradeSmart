@@ -68,6 +68,7 @@ env/
 
 # Old/duplicate project
 smartgrade/
+backend/
 
 # IDE
 .vscode/

@@ -12,11 +12,12 @@ import { typography } from '../theme/typography';
 export default function ScanConfirmationScreen({ navigation, route }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const { imageUri, images: imagesParam, testData } = route.params || {};
+  const { imageUri, images: imagesParam, sectionImages: sectionImagesParam, testData } = route.params || {};
   const images = React.useMemo(() => {
     if (imagesParam && Array.isArray(imagesParam) && imagesParam.length > 0) return imagesParam;
     return imageUri ? [imageUri] : [];
   }, [imagesParam, imageUri]);
+  const sectionImages = sectionImagesParam || null;
   const [studentName, setStudentName] = React.useState(route?.params?.studentName || '');
   const [studentNumber, setStudentNumber] = React.useState(route?.params?.studentNumber || '');
   const questionType = testData?.questionType || 'essay';
@@ -35,8 +36,9 @@ export default function ScanConfirmationScreen({ navigation, route }) {
 
   const handleConfirm = () => {
     const screen = getGradingScreen();
-    navigation.navigate(screen, {
+    navigation.push(screen, {
       images,
+      sectionImages,
       testData,
       studentName: studentName || 'Student',
       studentNumber: studentNumber || '',
@@ -141,6 +143,19 @@ export default function ScanConfirmationScreen({ navigation, route }) {
                   {testData?.totalPoints || '—'}
                 </Text>
               </View>
+
+              {sectionImages && sectionImages.length > 0 && (
+                <>
+                  <View style={{ height: 1, backgroundColor: colors.surfaceLight, marginVertical: 12 }} />
+                  <Text style={[typography.bodySmall, { color: colors.textSecondary, marginBottom: 8 }]}>Section Pages:</Text>
+                  {sectionImages.map((sec, i) => (
+                    <View key={i} style={styles.summaryRow}>
+                      <Text style={styles.summaryLabel}>Section {sec.label} ({sec.type})</Text>
+                      <Text style={styles.summaryValue}>{sec.images?.length || 0} page{(sec.images?.length || 0) !== 1 ? 's' : ''}</Text>
+                    </View>
+                  ))}
+                </>
+              )}
             </Card>
             
             {/* Info card */}

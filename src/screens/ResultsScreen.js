@@ -16,7 +16,7 @@ import { useToast } from '../components/Toast';
 export default function ResultsScreen({ navigation, route }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const { studentName, studentNumber, score, percentage, testData, images, gradingResults, gradingType } = route.params || {};
+  const { studentName, studentNumber, score, percentage, testData, images, gradingResults, gradingType, isDirectFlow } = route.params || {};
   const [currentView, setCurrentView] = useState('individual'); // 'individual' or 'list'
   const { scans, addScan } = useScans();
   const { showToast } = useToast();
@@ -30,6 +30,12 @@ export default function ResultsScreen({ navigation, route }) {
   }, []);
   const normalizedName = (studentName || 'Student').trim().toLowerCase();
   const isExisting = scans?.some((s) => (s.testId === testId) && ((s.studentName || '').trim().toLowerCase() === normalizedName));
+
+  // Determine if this is the last student to grade
+  const expectedStudents = parseInt(testData?.numberOfStudents, 10) || 0;
+  const scannedForTest = scans?.filter((s) => s.testId === testId).length || 0;
+  // After saving this one, scannedForTest + 1 will be the new count
+  const isLastStudent = expectedStudents > 0 && (scannedForTest + 1) >= expectedStudents;
   
   const individualResults = gradingResults || [];
   const correctCount = individualResults.filter(r => r.status === 'correct').length;
@@ -205,15 +211,27 @@ export default function ResultsScreen({ navigation, route }) {
     } catch (e) {
       // no-op; saving is best-effort for now
     }
-    showToast('Saved to Recent Scans', 'success');
-    navigation.navigate('Dashboard');
+    if (isLastStudent) {
+      showToast(`All ${expectedStudents} students graded!`, 'success');
+      navigation.navigate('Dashboard');
+    } else {
+      const remaining = expectedStudents > 0 ? expectedStudents - (scannedForTest + 1) : '?';
+      showToast(`Saved! ${remaining} student${remaining === 1 ? '' : 's'} remaining.`, 'success');
+      if (isDirectFlow) {
+        // Replace with a fresh MCQAnswerInput screen to reset all state
+        navigation.replace('MCQAnswerInput', { testData });
+      } else {
+        // Push a fresh Scan screen for the next student's paper
+        navigation.push('Scan', { testData });
+      }
+    }
   };
   
   return (
     <View style={styles.container}>
       <Header
         title="Grading Results"
-        onBack={() => navigation.goBack()}
+        onBack={() => navigation.navigate('Dashboard')}
         rightIcon="ellipsis-vertical"
         onRightPress={() => {}}
       />
@@ -224,12 +242,19 @@ export default function ResultsScreen({ navigation, route }) {
       >
         <AnimatedScreen>
           <View style={styles.studentInfo}>
-            <Text style={styles.studentName}>{studentName || 'Student Name'}</Text>
-            {!!studentNumber && (
-              <Text style={styles.pagesInfo}>Student No: {studentNumber}</Text>
-            )}
-            {!!images?.length && (
-              <Text style={styles.pagesInfo}>Pages captured: {images.length}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={styles.studentAvatar}>
+                <Ionicons name="person" size={22} color={colors.secondary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.studentName}>{studentName || 'Student Name'}</Text>
+                {!!studentNumber && (
+                  <Text style={styles.pagesInfo}>No: {studentNumber}</Text>
+                )}
+              </View>
+            </View>
+            {!!testData?.testName && (
+              <Text style={styles.testNameLabel}>{testData.testName}{testData.subject ? ` — ${testData.subject}` : ''}</Text>
             )}
           </View>
         </AnimatedScreen>
@@ -253,29 +278,35 @@ export default function ResultsScreen({ navigation, route }) {
               <View style={styles.scoreLeft}>
                 <Text style={styles.scoreValue}>{score || '0'}</Text>
                 <Text style={styles.scoreLabel}>Points Total</Text>
-                {incorrectCount > 0 && (
-                  <Text style={styles.incorrectText}>
-                    {incorrectCount} Incorrect
-                  </Text>
-                )}
-                {partialCount > 0 && (
-                  <Text style={[styles.incorrectText, { color: colors.warning }]}>
-                    {partialCount} Partial
-                  </Text>
-                )}
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                  <View style={[styles.statChip, { backgroundColor: colors.success + '15' }]}>
+                    <Ionicons name="checkmark" size={12} color={colors.success} />
+                    <Text style={[styles.statChipText, { color: colors.success }]}>{correctCount}</Text>
+                  </View>
+                  {partialCount > 0 && (
+                    <View style={[styles.statChip, { backgroundColor: colors.warning + '15' }]}>
+                      <Ionicons name="remove" size={12} color={colors.warning} />
+                      <Text style={[styles.statChipText, { color: colors.warning }]}>{partialCount}</Text>
+                    </View>
+                  )}
+                  <View style={[styles.statChip, { backgroundColor: colors.error + '15' }]}>
+                    <Ionicons name="close" size={12} color={colors.error} />
+                    <Text style={[styles.statChipText, { color: colors.error }]}>{incorrectCount}</Text>
+                  </View>
+                </View>
               </View>
               <View style={styles.scoreRight}>
                 <View style={[styles.percentageCircle, {
-                  backgroundColor: (parseInt(percentage) >= 50 ? colors.success : colors.error) + '20',
+                  backgroundColor: (parseInt(percentage) >= 50 ? colors.success : colors.error) + '15',
+                  borderWidth: 3,
+                  borderColor: (parseInt(percentage) >= 50 ? colors.success : colors.error) + '30',
                 }]}>
                   <Text style={[styles.percentageValue, {
                     color: parseInt(percentage) >= 50 ? colors.success : colors.error,
                   }]}>{percentage || '0%'}</Text>
-                  <Ionicons
-                    name={parseInt(percentage) >= 50 ? 'checkmark-circle' : 'close-circle'}
-                    size={40}
-                    color={parseInt(percentage) >= 50 ? colors.success : colors.error}
-                  />
+                  <Text style={[styles.percentageStatus, {
+                    color: parseInt(percentage) >= 50 ? colors.success : colors.error,
+                  }]}>{parseInt(percentage) >= 50 ? 'Pass' : 'Fail'}</Text>
                 </View>
               </View>
             </View>
@@ -300,50 +331,51 @@ export default function ResultsScreen({ navigation, route }) {
                   <Skeleton width={36} height={36} radius={18} />
                 </View>
               </Card>
-            )) : individualResults.map((result, index) => (
-              <Card key={index} style={styles.resultCard}>
-                <View style={styles.resultRow}>
-                  <View style={styles.resultLeft}>
-                    <Text style={styles.questionNumber}>Question {result.question}</Text>
-                    {(gradingType === 'mcq' || (result.correct && result.student && result.correct.length === 1)) ? (
-                      <View style={styles.answerRow}>
-                        <View style={styles.answerBadge}>
-                          <Text style={styles.answerLabel}>Correct</Text>
-                          <Text style={styles.answerValue}>{result.correct}</Text>
+            )) : individualResults.map((result, index) => {
+              const isCorrect = result.status === 'correct';
+              const isPartial = result.status === 'partial';
+              const statusColor = isCorrect ? colors.success : isPartial ? colors.warning : colors.error;
+              const isMCQ = gradingType === 'mcq' || (result.correct && result.student && result.correct.length === 1);
+              return (
+                <View key={index} style={[styles.resultCard, { borderLeftWidth: 3, borderLeftColor: statusColor }]}>
+                  <View style={styles.resultRow}>
+                    <View style={styles.resultLeft}>
+                      <Text style={styles.questionNumber}>Q{result.question}</Text>
+                      {isMCQ ? (
+                        <View style={styles.answerRow}>
+                          <View style={[styles.answerBadge, { backgroundColor: colors.success + '12' }]}>
+                            <Text style={[styles.answerBadgeText, { color: colors.success }]}>{result.correct}</Text>
+                          </View>
+                          <Ionicons name="arrow-forward" size={14} color={colors.textLight} style={{ marginHorizontal: 6 }} />
+                          <View style={[styles.answerBadge, {
+                            backgroundColor: isCorrect ? colors.success + '12' : colors.error + '12',
+                          }]}>
+                            <Text style={[styles.answerBadgeText, {
+                              color: isCorrect ? colors.success : colors.error,
+                            }]}>{result.student || '—'}</Text>
+                          </View>
                         </View>
-                        <Text style={styles.answerSeparator}>→</Text>
-                        <View style={styles.answerBadge}>
-                          <Text style={styles.answerLabel}>Student</Text>
-                          <Text style={styles.answerValue}>{result.student}</Text>
+                      ) : (
+                        <View style={styles.answerRow}>
+                          <Text style={[typography.bodySmall, { color: statusColor, fontWeight: '600' }]}>
+                            {result.points} / {result.maxPoints || result.points} pts
+                          </Text>
                         </View>
-                      </View>
-                    ) : (
-                      <View style={styles.answerRow}>
-                        <View style={styles.answerBadge}>
-                          <Text style={styles.answerLabel}>Score</Text>
-                          <Text style={styles.answerValue}>{result.points} / {result.maxPoints || result.points}</Text>
-                        </View>
-                      </View>
-                    )}
-                  </View>
-                  <View style={styles.resultRight}>
-                    {result.status === 'correct' ? (
-                      <View style={styles.statusCorrect}>
-                        <Text style={styles.statusText}>{result.points}</Text>
-                      </View>
-                    ) : result.status === 'partial' ? (
-                      <View style={[styles.statusCorrect, { backgroundColor: colors.warning + '20' }]}>
-                        <Text style={[styles.statusText, { color: colors.warning }]}>{result.points}</Text>
-                      </View>
-                    ) : (
-                      <View style={styles.statusIncorrect}>
-                        <Ionicons name="close" size={20} color={colors.error} />
-                      </View>
-                    )}
+                      )}
+                    </View>
+                    <View style={[styles.statusBubble, { backgroundColor: statusColor + '15' }]}>
+                      {isCorrect ? (
+                        <Ionicons name="checkmark" size={18} color={statusColor} />
+                      ) : isPartial ? (
+                        <Text style={[styles.statusBubbleText, { color: statusColor }]}>{result.points}</Text>
+                      ) : (
+                        <Ionicons name="close" size={18} color={statusColor} />
+                      )}
+                    </View>
                   </View>
                 </View>
-              </Card>
-            ))}
+              );
+            })}
           </View>
         </AnimatedScreen>
       </ScrollView>
@@ -364,9 +396,15 @@ export default function ResultsScreen({ navigation, route }) {
             )}
             <Text style={styles.exportBtnText}>{exporting ? 'Exporting...' : 'Export PDF'}</Text>
           </TouchableOpacity>
-          {!isExisting && (
+          {isExisting ? (
             <Button
-              title="Save & Next"
+              title="Go Home"
+              onPress={() => navigation.navigate('Dashboard')}
+              variant="primary"
+            />
+          ) : (
+            <Button
+              title={isLastStudent ? 'Save & Finish' : `Save & Grade Next${expectedStudents > 0 ? ` (${scannedForTest + 1}/${expectedStudents})` : ''}`}
               onPress={handleNext}
               variant="primary"
             />
@@ -380,25 +418,43 @@ export default function ResultsScreen({ navigation, route }) {
 const makeStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.surfaceLight,
+    backgroundColor: colors.background,
   },
   scrollView: {
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 24,
-    paddingTop: 24,
-    paddingBottom: 100,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 120,
   },
   studentInfo: {
     marginBottom: 16,
   },
+  studentAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.secondary + '15',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   studentName: {
-    ...typography.h2,
+    ...typography.h3,
     color: colors.text,
   },
+  pagesInfo: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  testNameLabel: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 8,
+  },
   scoreCard: {
-    marginBottom: 24,
+    marginBottom: 20,
   },
   scoreMain: {
     flexDirection: 'row',
@@ -411,44 +467,59 @@ const makeStyles = (colors) => StyleSheet.create({
   scoreValue: {
     ...typography.h1,
     color: colors.text,
-    fontSize: 48,
-    marginBottom: 8,
+    fontSize: 44,
   },
   scoreLabel: {
-    ...typography.body,
-    color: colors.textSecondary,
-    marginBottom: 4,
-  },
-  incorrectText: {
     ...typography.bodySmall,
-    color: colors.error,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  statChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  statChipText: {
+    ...typography.caption,
+    fontWeight: '700',
   },
   scoreRight: {
     alignItems: 'center',
   },
   percentageCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: colors.success + '20',
+    width: 96,
+    height: 96,
+    borderRadius: 48,
     justifyContent: 'center',
     alignItems: 'center',
   },
   percentageValue: {
     ...typography.h2,
-    color: colors.success,
+    fontWeight: '800',
+    fontSize: 24,
+  },
+  percentageStatus: {
+    ...typography.caption,
     fontWeight: '700',
+    marginTop: 1,
   },
   resultsSection: {
-    marginTop: 8,
+    marginTop: 4,
   },
   sectionTitle: {
-    ...typography.h3,
+    ...typography.h4,
     color: colors.text,
-    marginBottom: 16,
+    marginBottom: 12,
   },
   resultCard: {
-    marginBottom: 12,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
   },
   resultRow: {
     flexDirection: 'row',
@@ -459,80 +530,56 @@ const makeStyles = (colors) => StyleSheet.create({
     flex: 1,
   },
   questionNumber: {
-    ...typography.body,
+    ...typography.bodySmall,
     color: colors.text,
-    fontWeight: '600',
-    marginBottom: 8,
+    fontWeight: '700',
+    marginBottom: 6,
   },
   answerRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   answerBadge: {
-    backgroundColor: colors.surfaceLight,
     borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  answerLabel: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-  answerValue: {
-    ...typography.body,
-    color: colors.text,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  answerSeparator: {
-    ...typography.body,
-    color: colors.textLight,
-    marginHorizontal: 12,
-  },
-  resultRight: {
-    marginLeft: 16,
-  },
-  statusCorrect: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.success + '20',
-    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    minWidth: 32,
     alignItems: 'center',
   },
-  statusText: {
+  answerBadgeText: {
     ...typography.body,
-    color: colors.success,
-    fontWeight: '600',
+    fontWeight: '700',
   },
-  statusIncorrect: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.error + '20',
+  statusBubble: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
+    marginLeft: 12,
+  },
+  statusBubbleText: {
+    ...typography.bodySmall,
+    fontWeight: '700',
   },
   actions: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    paddingHorizontal: 24,
-    paddingVertical: 16,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 16,
     backgroundColor: colors.background,
     borderTopWidth: 1,
     borderTopColor: colors.border,
-  },
-  reviewButton: {
-    marginBottom: 12,
   },
   exportBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
     borderWidth: 1.5,
     borderColor: colors.secondary,
     gap: 8,

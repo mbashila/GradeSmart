@@ -8,66 +8,40 @@ import AnimatedScreen from '../components/AnimatedScreen';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { gradeMixed } from '../utils/grading';
-import { transcribeHandwritingWithVision, gradeEssayTextWithOpenAI, gradeDiagramWithVision, getOpenAIKey } from '../utils/openaiService';
+import { getOpenAIKey, detectAnswersWithAI } from '../utils/openaiService';
 import { getGradingMode } from '../components/SubjectPicker';
-import { useGradingServer } from '../context/GradingServerContext';
-import { detectMCQWithServer } from '../utils/gradingServerService';
-import { useNotifications } from '../context/NotificationsContext';
-
-/**
- * Split a combined transcription into per-question segments.
- * Looks for question markers (Q1, 1., Question 1, etc.) in the text.
- * Falls back to even splitting if no markers found.
- */
-function splitTranscriptionByQuestions(fullText, questionCount) {
-  if (questionCount <= 1) return [fullText.trim()];
-
-  const lines = fullText.split('\n');
-  const boundaries = [];
-
-  for (let li = 0; li < lines.length; li++) {
-    const line = lines[li];
-    const match = line.match(/^(?:Q|Question|#)?\s*(\d+)[.):]\s*/i);
-    if (match) {
-      const qNum = parseInt(match[1], 10);
-      if (qNum >= 1 && qNum <= questionCount) {
-        boundaries.push({ line: li, question: qNum });
-      }
-    }
-  }
-
-  if (boundaries.length >= Math.ceil(questionCount * 0.5)) {
-    return Array.from({ length: questionCount }, (_, q) => {
-      const boundary = boundaries.find(b => b.question === q + 1);
-      if (!boundary) return '';
-      const startLine = boundary.line;
-      const nextBoundary = boundaries.find(b => b.question > q + 1);
-      const endLine = nextBoundary ? nextBoundary.line : lines.length;
-      return lines.slice(startLine, endLine)
-        .join('\n')
-        .replace(/^(?:Q|Question|#)?\s*\d+[.):]\s*/i, '')
-        .trim();
-    });
-  }
-
-  const nonEmpty = lines.filter(l => l.trim());
-  const linesPerQ = Math.max(1, Math.ceil(nonEmpty.length / questionCount));
-  return Array.from({ length: questionCount }, (_, i) => {
-    const start = i * linesPerQ;
-    const end = i < questionCount - 1 ? start + linesPerQ : nonEmpty.length;
-    return nonEmpty.slice(start, end).join('\n').trim();
-  });
-}
+import { deriveQuestionStats } from '../utils/questionUtils';
+import useEssayGradingPipeline from '../hooks/useEssayGradingPipeline';
 
 export default function MixedScoringScreen({ navigation, route }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const { images, testData, studentName, studentNumber } = route.params || {};
+  const { images, sectionImages, testData, studentName, studentNumber } = route.params || {};
   const markingKey = testData?.markingKey || '';
-  const mcqCount = parseInt(testData?.mcqCount, 10) || markingKey.length || 0;
+  const sectionData = testData?.sectionData || [];
+  const derived = deriveQuestionStats(sectionData);
+  const mcqCount = (derived.totalQuestions > 0 ? derived.mcqCount : (parseInt(testData?.mcqCount, 10) || markingKey.length || 0));
   const mcqOptions = testData?.mcqOptions || 4;
   const CHOICES = Array.from({ length: mcqOptions }, (_, i) => String.fromCharCode(65 + i));
-  const totalQuestions = parseInt(testData?.numberOfQuestions, 10) || mcqCount;
+
+  // Determine total questions — use derived if essay sections have questions populated,
+  // otherwise fall back to testData.numberOfQuestions to account for essay sections with empty question arrays
+  const hasNonMcqSections = sectionData.some(s => s.type !== 'mcq');
+  const derivedEssayHasQuestions = derived.essayCount > 0;
+  const totalQuestions = (() => {
+    if (derived.totalQuestions > 0 && derivedEssayHasQuestions) {
+      return derived.totalQuestions;
+    }
+    const fromTestData = parseInt(testData?.numberOfQuestions, 10) || 0;
+    if (fromTestData > mcqCount) return fromTestData;
+    if (derived.totalQuestions > mcqCount) return derived.totalQuestions;
+    // If we have non-MCQ sections but no question count, estimate at least 1 essay question per section
+    if (hasNonMcqSections) {
+      const nonMcqSectionCount = sectionData.filter(s => s.type !== 'mcq').length;
+      return mcqCount + Math.max(nonMcqSectionCount, 1);
+    }
+    return derived.totalQuestions || mcqCount;
+  })();
   const essayCount = Math.max(totalQuestions - mcqCount, 0);
   const totalPoints = parseInt(testData?.totalPoints, 10) || totalQuestions;
 
@@ -82,9 +56,6 @@ export default function MixedScoringScreen({ navigation, route }) {
   const [mcqConfidence, setMcqConfidence] = useState(
     Array.from({ length: mcqCount }, () => 0)
   );
-  const [essayTranscriptions, setEssayTranscriptions] = useState(
-    Array.from({ length: essayCount }, () => '')
-  );
   const [essayScores, setEssayScores] = useState(
     Array.from({ length: essayCount }, (_, i) => ({
       question: mcqCount + i + 1,
@@ -97,10 +68,7 @@ export default function MixedScoringScreen({ navigation, route }) {
   const [showPreview, setShowPreview] = useState(false);
   const [section, setSection] = useState('mcq'); // 'mcq' or 'essay'
 
-  const { serverStatus } = useGradingServer();
-  const serverOk = serverStatus?.ok;
   const [openaiOk, setOpenaiOk] = useState(false);
-  const { addNotification } = useNotifications();
 
   // Check grading key on mount
   useEffect(() => {
@@ -110,90 +78,107 @@ export default function MixedScoringScreen({ navigation, route }) {
     })();
   }, []);
 
-  const questionTexts = testData?.questionTexts || [];
+  const questionTexts = React.useMemo(() => {
+    // Derive essay question texts from extracted questions (non-MCQ) if available
+    const extracted = testData?.extractedQuestions || [];
+    if (extracted.length > 0) {
+      const nonMcq = extracted.filter(q => q.type !== 'mcq');
+      if (nonMcq.length > 0) return nonMcq.map(q => q.text || `Question ${q.number || ''}`);
+    }
+    // Fall back to questionTexts from test setup (non-MCQ section texts)
+    return testData?.questionTexts || [];
+  }, [testData?.extractedQuestions, testData?.questionTexts]);
 
-  // Pipeline state: 'idle' → 'mcq' → 'ocr' → 'review' → 'ai' → 'done'
-  const [pipelineStep, setPipelineStep] = useState('idle');
-  const [pipelineMsg, setPipelineMsg] = useState('');
-  const [pipelineDone, setPipelineDone] = useState(false);
-  const [ocrPageProgress, setOcrPageProgress] = useState({ current: 0, total: 0 });
-  const [pageTexts, setPageTexts] = useState([]);
-  const [fullOcrText, setFullOcrText] = useState('');
+  // For mixed tests, filter sectionImages to non-MCQ sections only
+  const essaySectionImages = React.useMemo(() => {
+    if (!sectionImages) return null;
+    return sectionImages.filter(s => s.type !== 'mcq');
+  }, [sectionImages]);
 
-  // Run OCR on ALL pages (reads handwriting)
-  const runOcrOnAllPages = useCallback(async (imgs, cancelled = { value: false }) => {
-    setPageTexts([]);
-    setFullOcrText('');
-    setOcrPageProgress({ current: 0, total: imgs.length });
+  const essaySectionData = React.useMemo(() => {
+    return sectionData.filter(s => s.type !== 'mcq');
+  }, [sectionData]);
 
-    const texts = [];
-    for (let i = 0; i < imgs.length; i++) {
-      if (cancelled.value) return;
-      setOcrPageProgress({ current: i + 1, total: imgs.length });
-      setPipelineMsg(`Reading handwriting from page ${i + 1} of ${imgs.length}...`);
-      try {
-        const ocrResult = await transcribeHandwritingWithVision(imgs[i], {
-          questionCount: essayCount,
-          questionTexts: questionTexts.slice(mcqCount),
-          subject: testData?.subject || '',
-        });
-        texts.push(ocrResult.error ? '' : (ocrResult.text || ''));
-      } catch {
-        texts.push('');
+  // Essay pipeline via shared hook
+  const {
+    transcriptions,
+    aiFeedback,
+    pipelineStep,
+    pipelineMsg,
+    pipelineDone,
+    ocrPageProgress,
+    pageTexts,
+    fullOcrText,
+    runOcrOnAllPages,
+    handleConfirmOCR,
+    handleSkipAI,
+    handleRetry,
+    markDone,
+  } = useEssayGradingPipeline({
+    images,
+    sectionImages: essaySectionImages,
+    sectionData: essaySectionData,
+    questionCount: essayCount,
+    questionTexts,
+    scores: essayScores,
+    setScores: setEssayScores,
+    subject: testData?.subject || '',
+    gradeLevel: testData?.grade || '',
+    diagramIndices: React.useMemo(() => {
+      if (Array.isArray(sectionData) && sectionData.length > 0) {
+        const nonMcqSections = sectionData.filter(s => s.type !== 'mcq');
+        const indices = new Set();
+        let essayIdx = 0;
+        for (const sec of nonMcqSections) {
+          const qs = Array.isArray(sec.questions) ? sec.questions : [];
+          for (const q of qs) {
+            if (q.type === 'diagram') indices.add(essayIdx);
+            essayIdx++;
+          }
+        }
+        return indices;
       }
-    }
-    if (cancelled.value) return;
+      const indices = new Set();
+      const extractedQuestions = testData?.extractedQuestions || [];
+      extractedQuestions.forEach((q) => {
+        if (q.type === 'diagram') {
+          const eIdx = q.number - 1 - mcqCount;
+          if (eIdx >= 0 && eIdx < Math.max(totalQuestions - mcqCount, 0)) indices.add(eIdx);
+        }
+      });
+      return indices;
+    }, [sectionData, testData?.extractedQuestions, mcqCount, totalQuestions]),
+    studentName: studentName || 'Student',
+  });
 
-    setPageTexts(texts);
-    const combined = texts.map(t => t.trim()).filter(Boolean).join('\n\n');
-    setFullOcrText(combined);
+  const [mcqPhase, setMcqPhase] = useState(false);
+  const [mcqMsg, setMcqMsg] = useState('');
 
-    if (!combined.trim()) {
-      setPipelineMsg('Could not read handwriting from any page. Score essays manually.');
-      setPipelineStep('done');
-      setPipelineDone(true);
-      return;
-    }
-
-    // Intelligently split combined text into per-question transcriptions
-    const perQuestion = splitTranscriptionByQuestions(combined, essayCount);
-    setEssayTranscriptions(perQuestion);
-
-    const pageCount = texts.filter(t => t.trim()).length;
-    setPipelineMsg(`Read handwriting from ${pageCount} page(s). Review below, then continue.`);
-    setPipelineStep('review');
-    
-    // Notify when OCR completes
-    addNotification({
-      type: 'success',
-      title: 'Handwriting extracted',
-      message: `Successfully read ${pageCount} page(s) for ${studentName || 'Student'}.`,
-    });
-  }, [essayCount, questionTexts, mcqCount, testData]);
-
-  // Auto pipeline on mount
+  // Auto pipeline — runs once openaiOk is resolved
   useEffect(() => {
+    if (!openaiOk) return; // wait for key check
     const cancelled = { value: false };
     (async () => {
       if (!images?.length) {
-        setPipelineMsg('No image. Enter answers manually.');
-        setPipelineStep('done');
-        setPipelineDone(true);
-        return;
-      }
-      if (!serverOk) {
-        setPipelineMsg('Grading server not connected. Enter answers manually.');
-        setPipelineStep('done');
-        setPipelineDone(true);
+        markDone('No image. Enter answers manually.');
+        setMcqPhase(false);
         return;
       }
 
-      // Step 1: MCQ detection with OpenCV
+      // Determine MCQ and essay images from section tags or legacy flat array
+      const mcqSectionImgs = sectionImages
+        ? sectionImages.filter(s => s.type === 'mcq').flatMap(s => s.images || [])
+        : null;
+      const mcqImage = mcqSectionImgs && mcqSectionImgs.length > 0
+        ? mcqSectionImgs[0]
+        : images[0];
+
+      // Step 1: MCQ detection with OpenAI Vision
       if (mcqCount > 0) {
-        setPipelineStep('mcq');
-        setPipelineMsg('Detecting MCQ bubbles...');
+        setMcqPhase(true);
+        setMcqMsg('Reading MCQ answers with AI...');
         try {
-          const mcqResult = await detectMCQWithServer(images[0], mcqCount);
+          const mcqResult = await detectAnswersWithAI(mcqImage, mcqCount, markingKey, mcqOptions);
           if (cancelled.value) return;
           if (!mcqResult.error) {
             const newAnswers = mcqResult.answers.map((a) => (a === '?' ? '' : a));
@@ -201,155 +186,46 @@ export default function MixedScoringScreen({ navigation, route }) {
             setMcqAnswers(newAnswers);
             setMcqConfidence(newConf);
             const detected = newAnswers.filter((a) => a !== '').length;
-            setPipelineMsg(`MCQ: ${detected}/${mcqCount} detected.`);
+            setMcqMsg(`MCQ: ${detected}/${mcqCount} detected.`);
           } else {
-            setPipelineMsg(`MCQ detection failed: ${mcqResult.error}`);
+            setMcqMsg(`MCQ detection failed: ${mcqResult.error}`);
           }
         } catch {
-          if (!cancelled.value) setPipelineMsg('MCQ scan failed.');
+          if (!cancelled.value) setMcqMsg('MCQ scan failed.');
         }
       }
 
-      // Step 2: Essay OCR on ALL pages
+      // Step 2: Essay OCR — section-by-section if available, otherwise legacy
       if (essayCount > 0 && !cancelled.value && openaiOk) {
-        setPipelineStep('ocr');
-        await runOcrOnAllPages(images, cancelled);
+        setMcqPhase(false);
+        if (essaySectionImages && essaySectionImages.length > 0) {
+          // Section-by-section: the pipeline handles it via sectionImages param
+          const essayFlatImgs = essaySectionImages.flatMap(s => s.images || []);
+          await runOcrOnAllPages(essayFlatImgs, cancelled);
+        } else {
+          // Legacy: skip MCQ page if multiple images
+          const essayImages = (mcqCount > 0 && images.length > 1)
+            ? images.slice(1)
+            : images;
+          await runOcrOnAllPages(essayImages, cancelled);
+        }
         return; // pause at review or done
       } else if (essayCount > 0 && !openaiOk) {
-        setPipelineMsg('API key not set. Score essays manually.');
+        setMcqPhase(false);
+        markDone('API key not set. Score essays manually.');
       }
 
       if (!cancelled.value) {
-        setPipelineStep('done');
-        setPipelineDone(true);
-        if (mcqCount > 0 && essayCount === 0) {
-          setPipelineMsg('MCQ scan complete. Review below.');
-        }
+        setMcqPhase(false);
+        markDone(mcqCount > 0 && essayCount === 0 ? 'MCQ scan complete. Review below.' : 'Processing complete. Review below.');
       }
     })();
     return () => { cancelled.value = true; };
-  }, []);
+  }, [openaiOk]);
 
-  // Store grading feedback per essay question
-  const [aiFeedback, setAiFeedback] = useState(Array.from({ length: essayCount }, () => ''));
-
-  // Detect diagram-type questions from extracted data
-  const extractedQuestions = testData?.extractedQuestions || [];
-  const diagramEssayIndices = React.useMemo(() => {
-    const indices = new Set();
-    extractedQuestions.forEach((q) => {
-      if (q.type === 'diagram') {
-        // Map global question number to essay index (essay questions start after MCQs)
-        const essayIdx = q.number - 1 - mcqCount;
-        if (essayIdx >= 0 && essayIdx < essayCount) {
-          indices.add(essayIdx);
-        }
-      }
-    });
-    return indices;
-  }, [extractedQuestions, mcqCount, essayCount]);
-
-  // Teacher confirms OCR text → proceed to grading
-  const handleConfirmOCR = useCallback(async () => {
-    if (!fullOcrText.trim() && diagramEssayIndices.size === 0) {
-      setPipelineMsg('No text to grade. Score essays manually.');
-      setPipelineStep('done');
-      setPipelineDone(true);
-      return;
-    }
-
-    setPipelineStep('ai');
-    setPipelineMsg('Grading essays...');
-    try {
-      // Grade diagram questions using vision
-      const diagramResults = {};
-      if (diagramEssayIndices.size > 0 && images?.length > 0) {
-        let diagramIdx = 0;
-        for (const eIdx of diagramEssayIndices) {
-          diagramIdx++;
-          setPipelineMsg(`Grading diagram ${diagramIdx} of ${diagramEssayIndices.size}...`);
-          try {
-            const result = await gradeDiagramWithVision(images[0], {
-              questionText: questionTexts[mcqCount + eIdx] || `Question ${mcqCount + eIdx + 1}`,
-              maxPoints: essayScores[eIdx]?.maxPoints || 10,
-              subject: testData?.subject || '',
-            });
-            diagramResults[eIdx] = result;
-          } catch {
-            diagramResults[eIdx] = { score: 0, maxPoints: essayScores[eIdx]?.maxPoints || 10, feedback: 'Could not grade diagram.' };
-          }
-        }
-      }
-
-      // Grade text-based essay questions (non-diagram)
-      const textEssayQuestions = essayScores
-        .map((s, i) => ({ ...s, essayIndex: i }))
-        .filter((_, i) => !diagramEssayIndices.has(i));
-
-      let textResults = [];
-      if (textEssayQuestions.length > 0 && fullOcrText.trim()) {
-        setPipelineMsg('Grading written answers...');
-        const questionsForGrading = textEssayQuestions.map((s) => ({
-          questionNumber: s.question,
-          questionText: questionTexts[mcqCount + s.essayIndex] || `Question ${s.question}`,
-          studentAnswer: essayTranscriptions[s.essayIndex] || '',
-          maxPoints: s.maxPoints,
-        }));
-
-        const aiResult = await gradeEssayTextWithOpenAI(questionsForGrading, {
-          subject: testData?.subject || '',
-          gradeLevel: testData?.grade || '',
-        });
-
-        if (!aiResult.error && aiResult.results) {
-          textResults = aiResult.results;
-        }
-      }
-
-      // Merge results: diagram + text
-      const newEssayScores = [...essayScores];
-      const newFeedback = [...aiFeedback];
-      let textResultIdx = 0;
-
-      for (let i = 0; i < essayCount; i++) {
-        if (diagramEssayIndices.has(i) && diagramResults[i]) {
-          newEssayScores[i] = { ...newEssayScores[i], points: Math.min(diagramResults[i].score, newEssayScores[i].maxPoints) };
-          newFeedback[i] = diagramResults[i].feedback || '';
-        } else if (textResults[textResultIdx]) {
-          newEssayScores[i] = { ...newEssayScores[i], points: Math.min(textResults[textResultIdx].score || 0, newEssayScores[i].maxPoints) };
-          newFeedback[i] = textResults[textResultIdx].feedback || '';
-          textResultIdx++;
-        }
-      }
-
-      setEssayScores(newEssayScores);
-      setAiFeedback(newFeedback);
-      setPipelineMsg('Review scores below.');
-
-      const essayScore = newEssayScores.reduce((sum, s) => sum + s.points, 0);
-      addNotification({
-        type: 'success',
-        title: 'Essays graded',
-        message: `Grading completed for ${studentName || 'Student'}. Essay score: ${essayScore}/${essayTotalPoints}`,
-      });
-    } catch {
-      setPipelineMsg('Grading failed. Score essays manually.');
-      addNotification({
-        type: 'error',
-        title: 'Grading failed',
-        message: `Could not grade essays for ${studentName || 'Student'}. Please score manually.`,
-      });
-    }
-    setPipelineStep('done');
-    setPipelineDone(true);
-  }, [essayScores, essayTranscriptions, questionTexts, mcqCount, fullOcrText, testData, diagramEssayIndices, images, aiFeedback, essayCount]);
-
-  // Skip auto-grading, go straight to manual scoring
   const handleSkipEssayAI = useCallback(() => {
-    setPipelineMsg('Score essays manually using the extracted text.');
-    setPipelineStep('done');
-    setPipelineDone(true);
-  }, []);
+    handleSkipAI();
+  }, [handleSkipAI]);
 
   const handleMcqSelect = (qIndex, choice) => {
     setMcqAnswers((prev) => {
@@ -403,7 +279,8 @@ export default function MixedScoringScreen({ navigation, route }) {
   };
 
   // Full-screen scanning state (MCQ/OCR/grading running)
-  if (pipelineStep === 'mcq' || pipelineStep === 'ocr' || pipelineStep === 'ai') {
+  const currentMsg = mcqPhase ? mcqMsg : pipelineMsg;
+  if (mcqPhase || pipelineStep === 'ocr' || pipelineStep === 'ai') {
     const currentPageImg = pipelineStep === 'ocr' && images?.length > 0
       ? images[Math.min(ocrPageProgress.current - 1, images.length - 1)] || images[0]
       : images?.[0];
@@ -414,22 +291,22 @@ export default function MixedScoringScreen({ navigation, route }) {
           {currentPageImg && (
             <Image source={{ uri: currentPageImg }} style={styles.scanningImage} resizeMode="contain" />
           )}
-          <ActivityIndicator size="large" color={pipelineStep === 'ai' ? colors.secondary : colors.accent} style={{ marginTop: 20 }} />
-          <Text style={styles.scanningText}>{pipelineMsg}</Text>
+          <ActivityIndicator size="large" color={(pipelineStep === 'ai' || mcqPhase) ? colors.secondary : colors.accent} style={{ marginTop: 20 }} />
+          <Text style={styles.scanningText}>{currentMsg}</Text>
           {pipelineStep === 'ocr' && ocrPageProgress.total > 1 && (
             <View style={styles.pageProgressBar}>
               <View style={[styles.pageProgressFill, { width: `${(ocrPageProgress.current / ocrPageProgress.total) * 100}%` }]} />
             </View>
           )}
           <View style={styles.pipelineSteps}>
-            <View style={[styles.stepDot, pipelineStep === 'mcq' && styles.stepDotActive, (pipelineStep === 'ocr' || pipelineStep === 'ai') && styles.stepDotDone]} />
-            <View style={[styles.stepLine, (pipelineStep === 'ocr' || pipelineStep === 'ai') && styles.stepLineDone]} />
+            <View style={[styles.stepDot, mcqPhase && styles.stepDotActive, (!mcqPhase && (pipelineStep === 'ocr' || pipelineStep === 'ai')) && styles.stepDotDone]} />
+            <View style={[styles.stepLine, (!mcqPhase && (pipelineStep === 'ocr' || pipelineStep === 'ai')) && styles.stepLineDone]} />
             <View style={[styles.stepDot, pipelineStep === 'ocr' && styles.stepDotActive, pipelineStep === 'ai' && styles.stepDotDone]} />
             <View style={[styles.stepLine, pipelineStep === 'ai' && styles.stepLineDone]} />
             <View style={[styles.stepDot, pipelineStep === 'ai' && styles.stepDotActive]} />
           </View>
           <View style={styles.pipelineLabels}>
-            <Text style={[styles.stepLabel, pipelineStep === 'mcq' && { color: colors.accent }]}>MCQ</Text>
+            <Text style={[styles.stepLabel, mcqPhase && { color: colors.accent }]}>MCQ</Text>
             <Text style={[styles.stepLabel, pipelineStep === 'ocr' && { color: colors.accent }]}>OCR ({ocrPageProgress.current}/{ocrPageProgress.total})</Text>
             <Text style={[styles.stepLabel, pipelineStep === 'ai' && { color: colors.secondary }]}>Grading</Text>
           </View>
@@ -479,15 +356,15 @@ export default function MixedScoringScreen({ navigation, route }) {
             </Card>
 
             {/* Per-question breakdown */}
-            {essayCount > 1 && essayTranscriptions.some(t => t.trim()) && (
+            {essayCount > 1 && transcriptions.some(t => String(t || '').trim()) && (
               <View style={{ marginTop: 8 }}>
                 <Text style={[typography.h4, { color: colors.text, marginBottom: 8 }]}>Per Question</Text>
-                {essayTranscriptions.map((text, i) => (
+                {transcriptions.map((text, i) => (
                   <Card key={i} style={styles.ocrCard}>
                     <View style={styles.ocrCardHeader}>
                       <Ionicons name="help-circle-outline" size={18} color={colors.secondary} />
                       <Text style={styles.ocrCardLabel}>
-                        {questionTexts[mcqCount + i] ? `Q${mcqCount + i + 1}: ${questionTexts[mcqCount + i]}` : `Question ${mcqCount + i + 1}`}
+                        {questionTexts[i] ? `Q${mcqCount + i + 1}: ${questionTexts[i]}` : `Question ${mcqCount + i + 1}`}
                       </Text>
                     </View>
                     <View style={styles.ocrTextBox}>
@@ -718,10 +595,10 @@ export default function MixedScoringScreen({ navigation, route }) {
                     ]}
                   />
                 </View>
-                {essayTranscriptions[eIndex] ? (
+                {transcriptions[eIndex] ? (
                   <View style={styles.transcriptionBox}>
                     <Ionicons name="server-outline" size={12} color={colors.accent} />
-                    <Text style={styles.transcriptionText}>{essayTranscriptions[eIndex]}</Text>
+                    <Text style={styles.transcriptionText}>{transcriptions[eIndex]}</Text>
                   </View>
                 ) : null}
               </Card>

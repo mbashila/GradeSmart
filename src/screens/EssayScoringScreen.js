@@ -8,9 +8,10 @@ import AnimatedScreen from '../components/AnimatedScreen';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { gradeEssay } from '../utils/grading';
-import { transcribeHandwritingWithVision, gradeEssayTextWithOpenAI, gradeDiagramWithVision, getOpenAIKey } from '../utils/openaiService';
+import { getOpenAIKey } from '../utils/openaiService';
+import { splitTranscriptionByQuestions as sharedSplitTranscriptionByQuestions } from '../utils/questionUtils';
+import useEssayGradingPipeline from '../hooks/useEssayGradingPipeline';
 import { getGradingMode } from '../components/SubjectPicker';
-import { useNotifications } from '../context/NotificationsContext';
 
 /**
  * Split a combined transcription into per-question segments.
@@ -18,71 +19,48 @@ import { useNotifications } from '../context/NotificationsContext';
  * Falls back to even splitting if no markers found.
  */
 function splitTranscriptionByQuestions(fullText, questionCount) {
-  if (questionCount <= 1) return [fullText.trim()];
-
-  const lines = fullText.split('\n');
-  const boundaries = [];
-
-  for (let li = 0; li < lines.length; li++) {
-    const line = lines[li];
-    const match = line.match(/^(?:Q|Question|#)?\s*(\d+)[.):]\s*/i);
-    if (match) {
-      const qNum = parseInt(match[1], 10);
-      if (qNum >= 1 && qNum <= questionCount) {
-        boundaries.push({ line: li, question: qNum });
-      }
-    }
-  }
-
-  // If we found enough boundaries, split by them
-  if (boundaries.length >= Math.ceil(questionCount * 0.5)) {
-    return Array.from({ length: questionCount }, (_, q) => {
-      const boundary = boundaries.find(b => b.question === q + 1);
-      if (!boundary) return '';
-      const startLine = boundary.line;
-      const nextBoundary = boundaries.find(b => b.question > q + 1);
-      const endLine = nextBoundary ? nextBoundary.line : lines.length;
-      return lines.slice(startLine, endLine)
-        .join('\n')
-        .replace(/^(?:Q|Question|#)?\s*\d+[.):]\s*/i, '')
-        .trim();
-    });
-  }
-
-  // Fallback: split text evenly by lines
-  const nonEmpty = lines.filter(l => l.trim());
-  const linesPerQ = Math.max(1, Math.ceil(nonEmpty.length / questionCount));
-  return Array.from({ length: questionCount }, (_, i) => {
-    const start = i * linesPerQ;
-    const end = i < questionCount - 1 ? start + linesPerQ : nonEmpty.length;
-    return nonEmpty.slice(start, end).join('\n').trim();
-  });
+  return sharedSplitTranscriptionByQuestions(fullText, questionCount);
 }
 
 export default function EssayScoringScreen({ navigation, route }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const { images, testData, studentName, studentNumber } = route.params || {};
-  const questionCount = parseInt(testData?.numberOfQuestions, 10) || 1;
+  const { images, sectionImages, testData, studentName, studentNumber } = route.params || {};
+
+  // Derive actual question count from all available sources
+  const questionCount = (() => {
+    // 1. Extracted questions from AI (most accurate)
+    const extracted = testData?.extractedQuestions || [];
+    if (extracted.length > 0) return extracted.length;
+    // 2. Section data questions (from setup)
+    const sections = testData?.sectionData || [];
+    const fromSections = sections.flatMap(s => Array.isArray(s.questions) ? s.questions : []).length;
+    if (fromSections > 0) return fromSections;
+    // 3. Question texts array
+    const qTexts = testData?.questionTexts || [];
+    if (qTexts.length > 0) return qTexts.length;
+    // 4. Fall back to numberOfQuestions
+    return parseInt(testData?.numberOfQuestions, 10) || 1;
+  })();
   const totalPoints = parseInt(testData?.totalPoints, 10) || questionCount;
   const defaultMax = Math.round(totalPoints / questionCount);
 
-  const [scores, setScores] = useState(
-    Array.from({ length: questionCount }, (_, i) => ({
-      question: i + 1,
-      points: 0,
-      maxPoints: i < questionCount - 1
-        ? defaultMax
-        : totalPoints - defaultMax * (questionCount - 1),
-    }))
-  );
+  const [scores, setScores] = useState(() => {
+    const extracted = testData?.extractedQuestions || [];
+    return Array.from({ length: questionCount }, (_, i) => {
+      const extractedMax = extracted[i]?.maxPoints;
+      return {
+        question: i + 1,
+        points: 0,
+        maxPoints: extractedMax > 0
+          ? extractedMax
+          : (i < questionCount - 1 ? defaultMax : totalPoints - defaultMax * (questionCount - 1)),
+      };
+    });
+  });
   const [showPreview, setShowPreview] = useState(false);
   const [currentImage, setCurrentImage] = useState(0);
-  const [transcriptions, setTranscriptions] = useState(
-    Array.from({ length: questionCount }, () => '')
-  );
   const [openaiOk, setOpenaiOk] = useState(false);
-  const { addNotification } = useNotifications();
 
   // Check grading key on mount
   useEffect(() => {
@@ -92,209 +70,62 @@ export default function EssayScoringScreen({ navigation, route }) {
     })();
   }, []);
 
-  const questionTexts = testData?.questionTexts || [];
+  const questionTexts = React.useMemo(() => {
+    const extracted = testData?.extractedQuestions || [];
+    if (extracted.length > 0) return extracted.map(q => q.text || `Question ${q.number || ''}`);
+    return testData?.questionTexts || [];
+  }, [testData?.extractedQuestions, testData?.questionTexts]);
 
   // Pipeline state: 'idle' → 'ocr' → 'review' → 'ai' → 'done'
-  const [pipelineStep, setPipelineStep] = useState('idle');
-  const [pipelineMsg, setPipelineMsg] = useState('');
-  const [pipelineDone, setPipelineDone] = useState(false);
-  const [ocrPageProgress, setOcrPageProgress] = useState({ current: 0, total: 0 });
-  // Store raw OCR text per page
-  const [pageTexts, setPageTexts] = useState([]);
-  // Combined full text from all pages
-  const [fullOcrText, setFullOcrText] = useState('');
-
-  // Run OCR on ALL pages (reads handwriting)
-  const runOcrOnAllPages = useCallback(async (imgs) => {
-    setPipelineStep('ocr');
-    setPageTexts([]);
-    setFullOcrText('');
-    setOcrPageProgress({ current: 0, total: imgs.length });
-    setPipelineMsg(`Reading handwriting from page 1 of ${imgs.length}...`);
-
-    const texts = [];
-    for (let i = 0; i < imgs.length; i++) {
-      setOcrPageProgress({ current: i + 1, total: imgs.length });
-      setPipelineMsg(`Reading handwriting from page ${i + 1} of ${imgs.length}...`);
-      try {
-        const ocrResult = await transcribeHandwritingWithVision(imgs[i], {
-          questionCount,
-          questionTexts,
-          subject: testData?.subject || '',
-        });
-        texts.push(ocrResult.error ? '' : (ocrResult.text || ''));
-      } catch {
-        texts.push('');
-      }
-    }
-
-    setPageTexts(texts);
-    const combined = texts.map(t => t.trim()).filter(Boolean).join('\n\n');
-    setFullOcrText(combined);
-
-    if (!combined.trim()) {
-      setPipelineMsg('Could not read handwriting from any page. Score manually.');
-      setPipelineStep('done');
-      setPipelineDone(true);
-      return;
-    }
-
-    // Intelligently split combined text into per-question transcriptions
-    const perQuestion = splitTranscriptionByQuestions(combined, questionCount);
-    setTranscriptions(perQuestion);
-
-    const pageCount = texts.filter(t => t.trim()).length;
-    setPipelineMsg(`Read handwriting from ${pageCount} page(s). Review below, then continue.`);
-    setPipelineStep('review');
-    
-    // Notify when OCR completes
-    addNotification({
-      type: 'success',
-      title: 'Handwriting extracted',
-      message: `Successfully read ${pageCount} page(s) for ${studentName || 'Student'}.`,
-    });
-  }, [questionCount, questionTexts, testData]);
+  const {
+    transcriptions,
+    aiFeedback,
+    pipelineStep,
+    pipelineMsg,
+    pipelineDone,
+    ocrPageProgress,
+    pageTexts,
+    fullOcrText,
+    runOcrOnAllPages,
+    handleConfirmOCR,
+    handleSkipAI,
+    handleRetry,
+    markDone,
+  } = useEssayGradingPipeline({
+    images,
+    sectionImages: sectionImages || null,
+    sectionData: testData?.sectionData || [],
+    questionCount,
+    questionTexts,
+    scores,
+    setScores,
+    subject: testData?.subject || '',
+    gradeLevel: testData?.grade || '',
+    diagramIndices: React.useMemo(() => {
+      const extractedQuestions = testData?.extractedQuestions || [];
+      const indices = new Set();
+      extractedQuestions.forEach((q) => {
+        if (q.type === 'diagram') {
+          indices.add((q.number || 1) - 1);
+        }
+      });
+      return indices;
+    }, [testData?.extractedQuestions]),
+    studentName: studentName || 'Student',
+  });
 
   // Auto pipeline on mount
   useEffect(() => {
     if (!images?.length) {
-      setPipelineMsg('No images captured. Score manually.');
-      setPipelineStep('done');
-      setPipelineDone(true);
+      markDone('No images captured. Score manually.');
       return;
     }
     if (!openaiOk) {
-      setPipelineMsg('API key not set. Score manually.');
-      setPipelineStep('done');
-      setPipelineDone(true);
+      markDone('API key not set. Score manually.');
       return;
     }
     runOcrOnAllPages(images);
   }, [openaiOk]);
-
-  // Store grading feedback per question
-  const [aiFeedback, setAiFeedback] = useState(Array.from({ length: questionCount }, () => ''));
-
-  // Detect diagram-type questions from extracted data
-  const extractedQuestions = testData?.extractedQuestions || [];
-  const diagramQuestionIndices = React.useMemo(() => {
-    const indices = new Set();
-    extractedQuestions.forEach((q) => {
-      if (q.type === 'diagram') {
-        // question numbers are 1-indexed, scores array is 0-indexed
-        indices.add(q.number - 1);
-      }
-    });
-    return indices;
-  }, [extractedQuestions]);
-
-  // Teacher confirms OCR text → proceed to grading
-  const handleConfirmOCR = useCallback(async () => {
-    if (!fullOcrText.trim() && diagramQuestionIndices.size === 0) {
-      setPipelineMsg('No text to grade. Score manually.');
-      setPipelineStep('done');
-      setPipelineDone(true);
-      return;
-    }
-
-    setPipelineStep('ai');
-    setPipelineMsg('Grading answers...');
-    try {
-      // Grade diagram questions using vision (send student answer image directly)
-      const diagramResults = {};
-      if (diagramQuestionIndices.size > 0 && images?.length > 0) {
-        let diagramIdx = 0;
-        for (const qIdx of diagramQuestionIndices) {
-          diagramIdx++;
-          setPipelineMsg(`Grading diagram ${diagramIdx} of ${diagramQuestionIndices.size}...`);
-          try {
-            const result = await gradeDiagramWithVision(images[0], {
-              questionText: questionTexts[qIdx] || `Question ${qIdx + 1}`,
-              maxPoints: scores[qIdx]?.maxPoints || 10,
-              subject: testData?.subject || '',
-            });
-            diagramResults[qIdx] = result;
-          } catch {
-            diagramResults[qIdx] = { score: 0, maxPoints: scores[qIdx]?.maxPoints || 10, feedback: 'Could not grade diagram.' };
-          }
-        }
-      }
-
-      // Grade text-based questions (non-diagram)
-      const textQuestions = scores
-        .map((s, i) => ({ ...s, index: i }))
-        .filter((_, i) => !diagramQuestionIndices.has(i));
-
-      let textResults = [];
-      if (textQuestions.length > 0 && fullOcrText.trim()) {
-        setPipelineMsg('Grading written answers...');
-        const questionsForGrading = textQuestions.map((s) => ({
-          questionNumber: s.question,
-          questionText: questionTexts[s.index] || `Question ${s.question}`,
-          studentAnswer: transcriptions[s.index] || '',
-          maxPoints: s.maxPoints,
-        }));
-
-        const aiResult = await gradeEssayTextWithOpenAI(questionsForGrading, {
-          subject: testData?.subject || '',
-          gradeLevel: testData?.grade || '',
-        });
-
-        if (!aiResult.error && aiResult.results) {
-          textResults = aiResult.results;
-        }
-      }
-
-      // Merge results: diagram + text
-      const newScores = [...scores];
-      const newFeedback = [...aiFeedback];
-      let textResultIdx = 0;
-
-      for (let i = 0; i < scores.length; i++) {
-        if (diagramQuestionIndices.has(i) && diagramResults[i]) {
-          newScores[i] = { ...newScores[i], points: Math.min(diagramResults[i].score, newScores[i].maxPoints) };
-          newFeedback[i] = diagramResults[i].feedback || '';
-        } else if (textResults[textResultIdx]) {
-          newScores[i] = { ...newScores[i], points: Math.min(textResults[textResultIdx].score || 0, newScores[i].maxPoints) };
-          newFeedback[i] = textResults[textResultIdx].feedback || '';
-          textResultIdx++;
-        }
-      }
-
-      setScores(newScores);
-      setAiFeedback(newFeedback);
-      setPipelineMsg('Review scores below.');
-
-      const finalScore = newScores.reduce((sum, s) => sum + s.points, 0);
-      addNotification({
-        type: 'success',
-        title: 'Grading complete',
-        message: `Grading completed for ${studentName || 'Student'}. Score: ${finalScore}/${totalPoints}`,
-      });
-    } catch {
-      setPipelineMsg('Grading failed. Score manually.');
-      addNotification({
-        type: 'error',
-        title: 'Grading failed',
-        message: `Could not grade ${studentName || 'Student'}. Please score manually.`,
-      });
-    }
-    setPipelineStep('done');
-    setPipelineDone(true);
-  }, [scores, transcriptions, questionTexts, fullOcrText, testData, diagramQuestionIndices, images, aiFeedback]);
-
-  // Skip auto-grading, go straight to manual scoring
-  const handleSkipAI = useCallback(() => {
-    setPipelineMsg('Score manually using the extracted text.');
-    setPipelineStep('done');
-    setPipelineDone(true);
-  }, []);
-
-  const handleRetry = useCallback(async () => {
-    if (!images?.length) return;
-    setPipelineDone(false);
-    runOcrOnAllPages(images);
-  }, [images, runOcrOnAllPages]);
 
   const handleScoreChange = (qIndex, value) => {
     const num = parseInt(value, 10);

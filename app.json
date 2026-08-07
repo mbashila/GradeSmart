@@ -8,8 +8,13 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "extra": {
-      "EXPO_PUBLIC_SUPABASE_URL": "",
-      "EXPO_PUBLIC_SUPABASE_ANON_KEY": ""
+      "EXPO_PUBLIC_SUPABASE_URL": "https://bxmhgcnhvaqdbadgzvwy.supabase.co",
+      "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_5pRRHZZ98XyzaVfF9WhagA_5Xth4bzQ",
+      "EXPO_PUBLIC_OPENROUTER_API_KEY": "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",
+      "EXPO_PUBLIC_GRADING_SERVER_URL": "http://172.20.10.4:8100",
+      "eas": {
+        "projectId": "3002c97d-a06e-487b-85fc-81639b068238"
+      }
     },
     "splash": {
       "image": "./assets/splash.png",
@@ -48,7 +53,9 @@
         }
       ],
       "expo-secure-store",
-      "expo-font"
-    ]
+      "expo-font",
+      "expo-web-browser"
+    ],
+    "owner": "kuwunda"
   }
 }
