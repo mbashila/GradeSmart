@@ -20,10 +20,13 @@ const AuthContext = createContext({
   deleteAccount: async () => ({ error: null }),
 });
 
+const SESSION_RESTORE_TIMEOUT_MS = 5000;
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [isGuest, setIsGuest] = useState(false);
   const [userRole, setUserRole] = useState('user');
 
@@ -31,58 +34,67 @@ export function AuthProvider({ children }) {
     let mounted = true;
 
     if (!isSupabaseConfigured) {
+      console.log('[AUTH] Supabase not configured, skipping session restore');
       setLoading(false);
       return;
     }
 
-    // Timeout so the splash screen never hangs indefinitely
+    const fetchRole = async (userId, source) => {
+      try {
+        const { data: profile, error: roleErr } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', userId)
+          .maybeSingle();
+        if (roleErr) {
+          console.log(`[AUTH] Role fetch failed (${source}):`, roleErr.message);
+          return;
+        }
+        if (mounted) setUserRole(profile?.role || 'user');
+        console.log(`[AUTH] Role loaded (${source}):`, profile?.role || 'user');
+      } catch (e) {
+        console.log(`[AUTH] Role fetch exception (${source}):`, e?.message || e);
+      }
+    };
+
     const timeout = setTimeout(() => {
-      if (mounted && loading) setLoading(false);
-    }, 5000);
+      if (!mounted) return;
+      console.log('[AUTH] Session restoration timed out');
+      setError(new Error('Session restoration timed out'));
+      setLoading(false);
+    }, SESSION_RESTORE_TIMEOUT_MS);
 
     (async () => {
+      console.log('[AUTH] Restoring session...');
       try {
-        const { data } = await supabase.auth.getSession();
+        const { data, error: sessionErr } = await supabase.auth.getSession();
         if (!mounted) return;
-        setSession(data?.session ?? null);
-        setUser(data?.session?.user ?? null);
-        // Fetch role from profiles table
-        if (data?.session?.user?.id) {
-          try {
-            const { data: profile, error: roleErr } = await supabase
-              .from('profiles')
-              .select('role')
-              .eq('id', data.session.user.id)
-              .maybeSingle();
-            if (roleErr) console.log('Role fetch error:', roleErr);
-            if (mounted && profile?.role) setUserRole(profile.role);
-          } catch (e) {
-            console.log('Role fetch exception:', e);
-          }
-        }
+        if (sessionErr) throw sessionErr;
+        const restored = data?.session ?? null;
+        setSession(restored);
+        setUser(restored?.user ?? null);
+        setError(null);
+        console.log(restored ? '[AUTH] Session found' : '[AUTH] No session found');
+        if (restored?.user?.id) await fetchRole(restored.user.id, 'restore');
       } catch (e) {
-        console.log('Auth getSession error:', e);
+        console.log('[AUTH] Session restoration failed:', e?.message || e);
+        if (mounted) setError(e);
       } finally {
         clearTimeout(timeout);
         if (mounted) setLoading(false);
       }
     })();
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, sess) => {
+    // The callback must stay synchronous: supabase-js invokes it while holding
+    // its internal auth lock, and awaiting a Supabase query in here deadlocks
+    // every later request (the query itself needs that lock for its token).
+    const { data: sub } = supabase.auth.onAuthStateChange((event, sess) => {
+      console.log('[AUTH] Auth state changed:', event, sess?.user ? 'with session' : 'no session');
       setSession(sess);
       setUser(sess?.user ?? null);
       if (sess?.user?.id) {
-        try {
-          const { data: profile, error: roleErr } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', sess.user.id)
-            .maybeSingle();
-          if (roleErr) console.log('Role fetch error (auth change):', roleErr);
-          if (profile?.role) setUserRole(profile.role);
-        } catch (e) {
-          console.log('Role fetch exception (auth change):', e);
-        }
+        const userId = sess.user.id;
+        setTimeout(() => { if (mounted) fetchRole(userId, event); }, 0);
       } else {
         setUserRole('user');
       }
@@ -95,7 +107,11 @@ export function AuthProvider({ children }) {
   }, []);
 
   const signIn = useCallback(async ({ email, password }) => {
-    return await supabase.auth.signInWithPassword({ email, password });
+    console.log('[LOGIN] Attempting login...');
+    const result = await supabase.auth.signInWithPassword({ email, password });
+    if (result.error) console.log('[LOGIN] Login failed:', result.error.message);
+    else console.log('[LOGIN] Login successful');
+    return result;
   }, []);
 
   const signUp = useCallback(async ({ email, password, name, phone }) => {
@@ -209,6 +225,7 @@ export function AuthProvider({ children }) {
     user,
     session,
     loading,
+    error,
     isConfigured: isSupabaseConfigured,
     isGuest,
     isAdmin,
@@ -222,7 +239,7 @@ export function AuthProvider({ children }) {
     changePassword,
     resetPassword,
     deleteAccount,
-  }), [user, session, loading, isGuest, isAdmin, userRole, signIn, signUp, signInWithPhone, signInAsGuest, signOut, updateProfile, changePassword, resetPassword, deleteAccount]);
+  }), [user, session, loading, error, isGuest, isAdmin, userRole, signIn, signUp, signInWithPhone, signInAsGuest, signOut, updateProfile, changePassword, resetPassword, deleteAccount]);
 
   return (
     <AuthContext.Provider value={value}>
