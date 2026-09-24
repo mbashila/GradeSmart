@@ -22,8 +22,8 @@ export default function DashboardScreen({ navigation }) {
   const { unreadCount } = useNotifications();
   const { width } = useWindowDimensions();
   const isTablet = width >= 900;
-  const { scans, syncing: scansSyncing, guestTestsRemaining } = useScans();
-  const { tests, deleteTest, syncing: testsSyncing } = useTests();
+  const { scans, syncing: scansSyncing, syncError: scansError, guestTestsRemaining } = useScans();
+  const { tests, deleteTest, syncing: testsSyncing, syncError: testsError } = useTests();
   const { user, isGuest, signOut } = useAuth();
   const { isLiked, toggleLike } = useLikes();
 
@@ -33,6 +33,7 @@ export default function DashboardScreen({ navigation }) {
     () => signOut() // force logout callback
   );
   const loading = scansSyncing || testsSyncing;
+  const syncError = !loading && (scansError || testsError);
   const displayName = React.useMemo(() => {
     if (isGuest) return 'Guest';
     const name = user?.user_metadata?.full_name || '';
@@ -239,6 +240,9 @@ export default function DashboardScreen({ navigation }) {
                       <Text style={styles.statLabel}>Scans</Text>
                     </View>
                   </View>
+                )}
+                {!!syncError && (
+                  <Text style={styles.syncErrorText}>Couldn't sync with the server. Showing saved data.</Text>
                 )}
               </View>
             </AnimatedScreen>
@@ -485,6 +489,12 @@ const makeStyles = (colors) => StyleSheet.create({
     ...typography.bodySmall,
     color: colors.textSecondary,
     marginTop: 4,
+  },
+  syncErrorText: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    marginTop: 8,
+    textAlign: 'center',
   },
   headerContainer: {
     flexDirection: 'row',

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useMemo, useState, useCallback, useEffect } from 'react';
 import storage from '../utils/storage';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, withRequestTimeout } from '../lib/supabase';
 import { useAuth } from './AuthContext';
 
 const TestsContext = createContext({
@@ -9,12 +9,14 @@ const TestsContext = createContext({
   updateTest: () => {},
   deleteTest: () => {},
   syncing: false,
+  syncError: null,
 });
 
 export function TestsProvider({ children }) {
   const [tests, setTests] = useState([]);
   const [hydrated, setHydrated] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(null);
   const { user, isGuest } = useAuth();
 
   const STORAGE_KEY = isGuest ? '@gradesmart:tests:guest' : '@gradesmart:tests';
@@ -38,15 +40,20 @@ export function TestsProvider({ children }) {
 
       // Then sync from Supabase if available (not for guests)
       if (!isGuest && isSupabaseConfigured && user?.id) {
+        console.log('[DASHBOARD] Fetching tests...');
+        setSyncing(true);
+        setSyncError(null);
         try {
-          setSyncing(true);
-          const { data, error } = await supabase
+          const { data, error } = await withRequestTimeout((signal) => supabase
             .from('tests')
             .select('*')
             .eq('user_id', user.id)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .abortSignal(signal));
+          if (error) throw error;
 
-          if (!error && data && mounted) {
+          if (data && mounted) {
+            console.log('[DASHBOARD] Tests loaded:', data.length);
             const remoteTests = data.map((row) => ({
               id: row.id,
               createdAt: row.created_at,
@@ -63,7 +70,10 @@ export function TestsProvider({ children }) {
             }));
             setTests(remoteTests);
           }
-        } catch {} finally {
+        } catch (e) {
+          console.log('[DASHBOARD] Tests request failed:', e?.message || e);
+          if (mounted) setSyncError(e);
+        } finally {
           if (mounted) setSyncing(false);
         }
       }
@@ -146,7 +156,7 @@ export function TestsProvider({ children }) {
     }
   }, [user, isGuest]);
 
-  const value = useMemo(() => ({ tests, addTest, updateTest, deleteTest, syncing }), [tests, addTest, updateTest, deleteTest, syncing]);
+  const value = useMemo(() => ({ tests, addTest, updateTest, deleteTest, syncing, syncError }), [tests, addTest, updateTest, deleteTest, syncing, syncError]);
 
   return (
     <TestsContext.Provider value={value}>

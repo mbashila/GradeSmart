@@ -56,12 +56,18 @@ export function NotificationsProvider({ children }) {
       }
 
       // Get current user
-      const { data: { session } } = await supabase.auth.getSession();
-      const userId = session?.user?.id;
+      let userId = null;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        userId = session?.user?.id;
+      } catch (e) {
+        console.log('[NOTIFICATIONS] Session lookup failed:', e?.message || e);
+      }
+      if (!mounted) return;
       userIdRef.current = userId;
 
       if (!userId) {
-        if (mounted) setLoading(false);
+        setLoading(false);
         return;
       }
 
@@ -103,26 +109,8 @@ export function NotificationsProvider({ children }) {
         .subscribe();
     })();
 
-    // Also listen for auth changes (user login/logout)
-    const { data: authSub } = supabase.auth.onAuthStateChange(async (_event, sess) => {
-      const newUserId = sess?.user?.id;
-      if (newUserId === userIdRef.current) return;
-      userIdRef.current = newUserId;
-
-      // Cleanup old channel
-      if (channel) {
-        supabase.removeChannel(channel);
-        channel = null;
-      }
-
-      if (!newUserId) {
-        if (mounted) {
-          setNotifications([]);
-          setLoading(false);
-        }
-        return;
-      }
-
+    const loadForUser = async (newUserId) => {
+      if (!mounted) return;
       // Refetch for new user
       try {
         const { data, error } = await supabase
@@ -155,6 +143,30 @@ export function NotificationsProvider({ children }) {
           }
         )
         .subscribe();
+    };
+
+    // Also listen for auth changes (user login/logout). Must stay synchronous:
+    // awaiting Supabase queries inside this callback deadlocks the auth lock.
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, sess) => {
+      const newUserId = sess?.user?.id;
+      if (newUserId === userIdRef.current) return;
+      userIdRef.current = newUserId;
+
+      // Cleanup old channel
+      if (channel) {
+        supabase.removeChannel(channel);
+        channel = null;
+      }
+
+      if (!newUserId) {
+        if (mounted) {
+          setNotifications([]);
+          setLoading(false);
+        }
+        return;
+      }
+
+      setTimeout(() => loadForUser(newUserId), 0);
     });
 
     return () => {

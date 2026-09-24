@@ -61,6 +61,23 @@ const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || extras.EX
 
 export const isSupabaseConfigured = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
 
+export const REQUEST_TIMEOUT_MS = 15000;
+
+// Runs a Supabase request with an abort signal so a stalled network call
+// settles as an error instead of leaving callers loading forever.
+export async function withRequestTimeout(run, ms = REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await run(controller.signal);
+  } catch (e) {
+    if (controller.signal.aborted) throw new Error(`Request timed out after ${ms}ms`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export const supabase = createClient(
   SUPABASE_URL || 'https://invalid-project.supabase.co',
   SUPABASE_ANON_KEY || 'invalid-key',

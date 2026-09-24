@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useMemo, useState, useCallback, useEffect } from 'react';
 import storage from '../utils/storage';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, withRequestTimeout } from '../lib/supabase';
 import { useAuth } from './AuthContext';
 
 const GUEST_TEST_LIMIT = 1;
@@ -11,6 +11,7 @@ const ScansContext = createContext({
   addScan: () => {},
   deleteScan: () => {},
   syncing: false,
+  syncError: null,
   guestTestsRemaining: GUEST_TEST_LIMIT,
 });
 
@@ -20,6 +21,7 @@ export function ScansProvider({ children }) {
   const [scans, setScans] = useState([]);
   const [hydrated, setHydrated] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(null);
   const { user, isGuest } = useAuth();
 
   const STORAGE_KEY = isGuest ? '@gradesmart:scans:guest' : '@gradesmart:scans';
@@ -55,15 +57,20 @@ export function ScansProvider({ children }) {
 
       // Sync from Supabase (not for guests)
       if (!isGuest && isSupabaseConfigured && user?.id) {
+        console.log('[DASHBOARD] Fetching scans...');
+        setSyncing(true);
+        setSyncError(null);
         try {
-          setSyncing(true);
-          const { data, error } = await supabase
+          const { data, error } = await withRequestTimeout((signal) => supabase
             .from('scans')
             .select('*')
             .eq('user_id', user.id)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .abortSignal(signal));
+          if (error) throw error;
 
-          if (!error && data && mounted) {
+          if (data && mounted) {
+            console.log('[DASHBOARD] Scans loaded:', data.length);
             const remoteScans = data.map((row) => ({
               id: row.id,
               createdAt: row.created_at,
@@ -76,7 +83,10 @@ export function ScansProvider({ children }) {
             }));
             setScans(remoteScans);
           }
-        } catch {} finally {
+        } catch (e) {
+          console.log('[DASHBOARD] Scans request failed:', e?.message || e);
+          if (mounted) setSyncError(e);
+        } finally {
           if (mounted) setSyncing(false);
         }
       }
@@ -147,7 +157,7 @@ export function ScansProvider({ children }) {
     }
   }, [user, isGuest]);
 
-  const value = useMemo(() => ({ scans, addScan, deleteScan, syncing, guestTestsRemaining }), [scans, addScan, deleteScan, syncing, guestTestsRemaining]);
+  const value = useMemo(() => ({ scans, addScan, deleteScan, syncing, syncError, guestTestsRemaining }), [scans, addScan, deleteScan, syncing, syncError, guestTestsRemaining]);
 
   return (
     <ScansContext.Provider value={value}>
