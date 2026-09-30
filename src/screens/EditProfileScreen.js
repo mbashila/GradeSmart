@@ -4,7 +4,6 @@ import Header from '../components/Header';
 import Input from '../components/Input';
 import Button from '../components/Button';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { Skeleton } from '../components/Skeleton';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useAuth } from '../context/AuthContext';
@@ -21,12 +20,7 @@ export default function EditProfileScreen({ navigation }) {
   const [location, setLocation] = useState(meta.location || '');
   const [bio, setBio] = useState(meta.bio || '');
   const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 400);
-    return () => clearTimeout(t);
-  }, []);
 
   const handleSave = async () => {
     if (!fullName.trim()) {
@@ -67,28 +61,6 @@ export default function EditProfileScreen({ navigation }) {
           showsVerticalScrollIndicator={false}
         >
           <AnimatedScreen>
-            {loading ? (
-              <>
-                <View style={styles.section}>
-                  <Skeleton width={180} height={18} style={{ marginBottom: 16 }} />
-                  {[1,2,3].map(i => (
-                    <View key={i} style={{ marginBottom: 20 }}>
-                      <Skeleton width={90} height={12} style={{ marginBottom: 8 }} />
-                      <Skeleton width={'100%'} height={56} radius={12} />
-                    </View>
-                  ))}
-                </View>
-                <View style={styles.section}>
-                  <Skeleton width={160} height={18} style={{ marginBottom: 16 }} />
-                  {[1,2].map(i => (
-                    <View key={i} style={{ marginBottom: 20 }}>
-                      <Skeleton width={120} height={12} style={{ marginBottom: 8 }} />
-                      <Skeleton width={'100%'} height={i === 2 ? 100 : 56} radius={12} />
-                    </View>
-                  ))}
-                </View>
-              </>
-            ) : (
             <>
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Personal Information</Text>
@@ -132,7 +104,6 @@ export default function EditProfileScreen({ navigation }) {
               />
             </View>
             </>
-            )}
           </AnimatedScreen>
 
           <AnimatedScreen delay={100}>

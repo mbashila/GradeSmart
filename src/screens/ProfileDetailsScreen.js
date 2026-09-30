@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity } from 'rea
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { Skeleton, SkeletonCircle } from '../components/Skeleton';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useAuth } from '../context/AuthContext';
@@ -14,12 +13,7 @@ export default function ProfileDetailsScreen({ navigation }) {
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { user } = useAuth();
   const { isPro, planLabel } = useSubscription();
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 500);
-    return () => clearTimeout(t);
-  }, []);
   const meta = user?.user_metadata || {};
   const avatarUrl = meta.avatar_url || null;
 
@@ -63,32 +57,6 @@ export default function ProfileDetailsScreen({ navigation }) {
       <Header title="Profile Details" onBack={() => navigation.goBack()} />
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <AnimatedScreen>
-          {loading ? (
-            <>
-              {/* Skeleton hero */}
-              <View style={styles.heroSection}>
-                <SkeletonCircle size={110} />
-                <Skeleton width={160} height={22} style={{ marginTop: 14 }} />
-                <Skeleton width={200} height={14} style={{ marginTop: 6 }} />
-                <Skeleton width={120} height={36} radius={20} style={{ marginTop: 14 }} />
-              </View>
-              {/* Skeleton cards */}
-              {[1,2,3].map(s => (
-                <View key={s} style={styles.card}>
-                  <Skeleton width={140} height={16} style={{ marginBottom: 12 }} />
-                  {[1,2,3].map(r => (
-                    <View key={r} style={[styles.row, r < 3 && styles.rowBorder]}>
-                      <View style={styles.rowLeft}>
-                        <Skeleton width={32} height={32} radius={8} />
-                        <Skeleton width={100} height={14} style={{ marginLeft: 12 }} />
-                      </View>
-                      <Skeleton width={80} height={14} />
-                    </View>
-                  ))}
-                </View>
-              ))}
-            </>
-          ) : (
             <>
               {/* Large avatar + name header */}
               <View style={styles.heroSection}>
@@ -133,7 +101,6 @@ export default function ProfileDetailsScreen({ navigation }) {
                 </View>
               ))}
             </>
-          )}
         </AnimatedScreen>
       </ScrollView>
     </View>

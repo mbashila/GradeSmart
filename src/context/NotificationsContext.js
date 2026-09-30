@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, withRequestTimeout } from '../lib/supabase';
 
 const NotificationsContext = createContext({
   notifications: [],
@@ -9,7 +9,21 @@ const NotificationsContext = createContext({
   markAllRead: () => {},
   toggleRead: () => {},
   loading: true,
+  error: null,
+  refresh: async () => {},
 });
+
+async function fetchNotificationsForUser(userId) {
+  const { data, error } = await withRequestTimeout((signal) => supabase
+    .from('notifications')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(50)
+    .abortSignal(signal));
+  if (error) throw error;
+  return (data || []).map(mapRow);
+}
 
 function timeAgo(dateStr) {
   if (!dateStr) return '';
@@ -42,6 +56,7 @@ function mapRow(row) {
 export function NotificationsProvider({ children }) {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const userIdRef = useRef(null);
 
   // Fetch initial notifications and subscribe to realtime
@@ -73,21 +88,14 @@ export function NotificationsProvider({ children }) {
 
       // Fetch existing notifications
       try {
-        const { data, error } = await supabase
-          .from('notifications')
-          .select('*')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false })
-          .limit(50);
-
-        if (!error && data && mounted) {
-          setNotifications(data.map(mapRow));
-        }
+        const rows = await fetchNotificationsForUser(userId);
+        if (mounted) setNotifications(rows);
       } catch (e) {
-        console.log('Notifications fetch error:', e);
+        console.log('Notifications fetch error:', e?.message || e);
+        if (mounted) setError(e);
+      } finally {
+        if (mounted) setLoading(false);
       }
-
-      if (mounted) setLoading(false);
 
       // Subscribe to realtime inserts
       channel = supabase
@@ -112,18 +120,17 @@ export function NotificationsProvider({ children }) {
     const loadForUser = async (newUserId) => {
       if (!mounted) return;
       // Refetch for new user
+      setLoading(true);
+      setError(null);
       try {
-        const { data, error } = await supabase
-          .from('notifications')
-          .select('*')
-          .eq('user_id', newUserId)
-          .order('created_at', { ascending: false })
-          .limit(50);
-
-        if (!error && data && mounted) {
-          setNotifications(data.map(mapRow));
-        }
-      } catch {}
+        const rows = await fetchNotificationsForUser(newUserId);
+        if (mounted) setNotifications(rows);
+      } catch (e) {
+        console.log('Notifications fetch error:', e?.message || e);
+        if (mounted) setError(e);
+      } finally {
+        if (mounted) setLoading(false);
+      }
 
       // Re-subscribe
       channel = supabase
@@ -174,6 +181,19 @@ export function NotificationsProvider({ children }) {
       if (channel) supabase.removeChannel(channel);
       authSub?.subscription?.unsubscribe?.();
     };
+  }, []);
+
+  const refresh = useCallback(async () => {
+    const userId = userIdRef.current;
+    if (!isSupabaseConfigured || !userId) return;
+    setError(null);
+    try {
+      const rows = await fetchNotificationsForUser(userId);
+      if (userIdRef.current === userId) setNotifications(rows);
+    } catch (e) {
+      console.log('Notifications refresh error:', e?.message || e);
+      if (userIdRef.current === userId) setError(e);
+    }
   }, []);
 
   const unreadCount = useMemo(() => notifications.filter(n => !n.read).length, [notifications]);
@@ -240,7 +260,9 @@ export function NotificationsProvider({ children }) {
     markAllRead,
     toggleRead,
     loading,
-  }), [notifications, unreadCount, markAllRead, toggleRead, addNotification, loading]);
+    error,
+    refresh,
+  }), [notifications, unreadCount, markAllRead, toggleRead, addNotification, loading, error, refresh]);
 
   return (
     <NotificationsContext.Provider value={value}>

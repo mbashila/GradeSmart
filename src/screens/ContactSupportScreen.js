@@ -4,7 +4,6 @@ import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import AnimatedScreen from '../components/AnimatedScreen';
 import PressableScale from '../components/PressableScale';
-import { Skeleton, SkeletonCircle } from '../components/Skeleton';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useAuth } from '../context/AuthContext';
@@ -16,7 +15,6 @@ export default function ContactSupportScreen({ navigation }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { user } = useAuth();
-  const [loading, setLoading] = useState(true);
   const [showQueryModal, setShowQueryModal] = useState(false);
   const [querySubject, setQuerySubject] = useState('');
   const [queryMessage, setQueryMessage] = useState('');
@@ -56,10 +54,6 @@ export default function ContactSupportScreen({ navigation }) {
     }
   };
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 450);
-    return () => clearTimeout(t);
-  }, []);
   const userEmail = user?.email || '';
 
   const handleEmail = () => {
@@ -122,38 +116,6 @@ export default function ContactSupportScreen({ navigation }) {
       <Header title="Contact Support" onBack={() => navigation.goBack()} />
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <AnimatedScreen>
-          {loading ? (
-            <>
-              <View style={styles.hero}>
-                <SkeletonCircle size={64} />
-                <Skeleton width={180} height={22} style={{ marginTop: 14 }} />
-                <Skeleton width={220} height={14} style={{ marginTop: 6 }} />
-              </View>
-              <View style={styles.card}>
-                {[1,2,3,4].map(i => (
-                  <View key={i} style={[styles.contactRow, i < 4 && styles.rowBorder]}>
-                    <Skeleton width={44} height={44} radius={12} />
-                    <View style={[styles.contactText, { marginLeft: 14 }]}>
-                      <Skeleton width={100} height={16} />
-                      <Skeleton width={180} height={12} style={{ marginTop: 4 }} />
-                      <Skeleton width={120} height={10} style={{ marginTop: 4 }} />
-                    </View>
-                  </View>
-                ))}
-              </View>
-              <View style={styles.card}>
-                <Skeleton width={110} height={16} style={{ marginBottom: 8 }} />
-                {[1,2,3].map(i => (
-                  <View key={i} style={[styles.quickRow, i < 3 && styles.rowBorder]}>
-                    <View style={styles.quickLeft}>
-                      <Skeleton width={32} height={32} radius={8} />
-                      <Skeleton width={120} height={14} style={{ marginLeft: 12 }} />
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </>
-          ) : (
             <>
               {/* Hero */}
               <View style={styles.hero}>
@@ -207,7 +169,6 @@ export default function ContactSupportScreen({ navigation }) {
                 ))}
               </View>
             </>
-          )}
 
           {/* Query submission modal */}
           <Modal visible={showQueryModal} animationType="slide" transparent>

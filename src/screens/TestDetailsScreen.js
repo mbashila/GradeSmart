@@ -7,7 +7,9 @@ import Header from '../components/Header';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { Skeleton, SkeletonCircle } from '../components/Skeleton';
+import ErrorState from '../components/ErrorState';
+import { SkeletonText } from '../components/skeletons';
+import { StudentResultsSkeleton, TestAnalyticsSkeleton } from './skeletons/TestDetailsSkeleton';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useScans } from '../context/ScansContext';
@@ -17,15 +19,12 @@ export default function TestDetailsScreen({ navigation, route }) {
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { test } = route.params || {};
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'analytics'
-  const { scans } = useScans();
-  const [loading, setLoading] = useState(true);
+  const { scans, hydrated: scansHydrated, syncing: scansSyncing, syncError: scansError, refresh: refreshScans } = useScans();
   const [exporting, setExporting] = useState(false);
   const related = (scans || []).filter((s) => s.testId === (test?.id || test?.testId));
+  const loading = related.length === 0 && (scansSyncing || !scansHydrated);
+  const loadError = !loading && related.length === 0 && !!scansError;
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 600);
-    return () => clearTimeout(t);
-  }, []);
 
   const normalizePercentage = (scan) => {
     const p = scan?.percentage;
@@ -305,23 +304,6 @@ export default function TestDetailsScreen({ navigation, route }) {
         >
         {/* Test Info Card */}
         <AnimatedScreen>
-          {loading ? (
-            <Card style={styles.infoCard}>
-              <View style={styles.infoRow}>
-                {[1,2,3].map(i => (
-                  <View key={i} style={styles.infoItem}>
-                    <SkeletonCircle size={20} />
-                    <Skeleton width={50} height={12} style={{ marginTop: 6 }} />
-                    <Skeleton width={40} height={16} style={{ marginTop: 4 }} />
-                  </View>
-                ))}
-              </View>
-              <View style={styles.averageScore}>
-                <Skeleton width={100} height={14} />
-                <Skeleton width={50} height={24} style={{ marginTop: 4 }} />
-              </View>
-            </Card>
-          ) : (
             <Card style={styles.infoCard}>
               <View style={styles.infoRow}>
                 <View style={styles.infoItem}>
@@ -337,16 +319,15 @@ export default function TestDetailsScreen({ navigation, route }) {
                 <View style={styles.infoItem}>
                   <Ionicons name="document-text" size={20} color={colors.textSecondary} />
                   <Text style={styles.infoLabel}>Scans</Text>
-                  <Text style={styles.infoValue}>{test?.papersGraded || related.length}</Text>
+                  {loading && !test?.papersGraded ? <SkeletonText type="body" width={28} /> : <Text style={styles.infoValue}>{test?.papersGraded || related.length}</Text>}
                 </View>
               </View>
               
               <View style={styles.averageScore}>
                 <Text style={styles.averageScoreLabel}>Class Average</Text>
-                <Text style={styles.averageScoreValue}>{classAverage}%</Text>
+                {loading ? <SkeletonText type="h1" width={80} /> : <Text style={styles.averageScoreValue}>{classAverage}%</Text>}
               </View>
             </Card>
-          )}
         </AnimatedScreen>
         
         {/* View Mode Toggle */}
@@ -404,20 +385,15 @@ export default function TestDetailsScreen({ navigation, route }) {
             <View style={styles.studentsSection}>
               <Text style={styles.sectionTitle}>Student Results</Text>
               
-              {loading ? [1,2,3].map(i => (
-                <Card key={i} style={styles.studentCard}>
-                  <View style={styles.studentCardHeader}>
-                    <View style={styles.studentInfo}>
-                      <Skeleton width={'60%'} height={16} />
-                      <Skeleton width={'40%'} height={12} style={{ marginTop: 6 }} />
-                    </View>
-                    <View style={styles.studentGrades}>
-                      <Skeleton width={52} height={28} radius={12} />
-                      <Skeleton width={32} height={28} radius={12} style={{ marginLeft: 6 }} />
-                    </View>
-                  </View>
-                </Card>
-              )) : students.map((student) => (
+              {loading ? (
+                <StudentResultsSkeleton styles={styles} />
+              ) : loadError ? (
+                <ErrorState
+                  title="Unable to load student results"
+                  onRetry={refreshScans}
+                  retrying={scansSyncing}
+                />
+              ) : students.map((student) => (
                 <Card
                   key={student.id}
                   style={styles.studentCard}
@@ -469,7 +445,13 @@ export default function TestDetailsScreen({ navigation, route }) {
         )}
         
         {/* Analytics View */}
-        {viewMode === 'analytics' && (
+        {viewMode === 'analytics' && loading && (
+          <AnimatedScreen delay={160}>
+            <TestAnalyticsSkeleton styles={styles} />
+          </AnimatedScreen>
+        )}
+
+        {viewMode === 'analytics' && !loading && (
           <AnimatedScreen delay={160}>
             <View style={styles.analyticsSection}>
 

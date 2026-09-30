@@ -1,10 +1,11 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
-import Skeleton, { SkeletonCircle } from '../components/Skeleton';
+import ErrorState from '../components/ErrorState';
+import NotificationsSkeleton from './skeletons/NotificationsSkeleton';
 import PressableScale from '../components/PressableScale';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
@@ -13,7 +14,27 @@ import { useNotifications } from '../context/NotificationsContext';
 export default function NotificationsScreen({ navigation }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const { notifications, unreadCount, markAllRead, toggleRead, loading } = useNotifications();
+  const { notifications, markAllRead, toggleRead, loading, error, refresh } = useNotifications();
+  const [refreshing, setRefreshing] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh]);
+
+  const onRetry = useCallback(async () => {
+    setRetrying(true);
+    try {
+      await refresh();
+    } finally {
+      setRetrying(false);
+    }
+  }, [refresh]);
 
   const getIcon = (type) => {
     switch (type) {
@@ -41,22 +62,27 @@ export default function NotificationsScreen({ navigation }) {
         onRightPress={markAllRead}
       />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.secondary}
+            colors={[colors.secondary]}
+          />
+        }
+      >
         <AnimatedScreen>
-          {loading ? (
-            [1,2,3,4].map(idx => (
-              <Card key={idx} style={styles.notificationCard}>
-                <View style={styles.row}>
-                  <View style={styles.iconWrap}>
-                    <SkeletonCircle size={24} />
-                  </View>
-                  <View style={styles.content}>
-                    <Skeleton width={'65%'} height={16} />
-                    <Skeleton width={'90%'} height={14} style={{ marginTop: 8 }} />
-                  </View>
-                </View>
-              </Card>
-            ))
+          {loading && notifications.length === 0 ? (
+            <NotificationsSkeleton styles={styles} />
+          ) : error && notifications.length === 0 ? (
+            <ErrorState
+              title="Unable to load notifications"
+              onRetry={onRetry}
+              retrying={retrying}
+            />
           ) : notifications.length === 0 ? (
             <Card style={[styles.notificationCard, { alignItems: 'center' }]}> 
               <Ionicons name="checkmark-circle-outline" size={40} color={colors.secondary} />

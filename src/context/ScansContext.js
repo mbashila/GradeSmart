@@ -12,8 +12,23 @@ const ScansContext = createContext({
   deleteScan: () => {},
   syncing: false,
   syncError: null,
+  hydrated: false,
+  refresh: async () => {},
   guestTestsRemaining: GUEST_TEST_LIMIT,
 });
+
+function mapScanRow(row) {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    testId: row.test_id || '',
+    studentName: row.student_name || '',
+    score: row.score || 0,
+    maxScore: row.max_score || 0,
+    percentage: row.percentage || 0,
+    ...(row.data || {}),
+  };
+}
 
 export { GUEST_TEST_LIMIT };
 
@@ -38,6 +53,34 @@ export function ScansProvider({ children }) {
     })();
   }, []);
 
+  const fetchRemote = useCallback(async (isCurrent = () => true) => {
+    if (isGuest || !isSupabaseConfigured || !user?.id) return;
+    console.log('[DASHBOARD] Fetching scans...');
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const { data, error } = await withRequestTimeout((signal) => supabase
+        .from('scans')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .abortSignal(signal));
+      if (error) throw error;
+
+      if (data && isCurrent()) {
+        console.log('[DASHBOARD] Scans loaded:', data.length);
+        setScans(data.map(mapScanRow));
+      }
+    } catch (e) {
+      console.log('[DASHBOARD] Scans request failed:', e?.message || e);
+      if (isCurrent()) setSyncError(e);
+    } finally {
+      if (isCurrent()) setSyncing(false);
+    }
+  }, [user?.id, isGuest]);
+
+  const refresh = useCallback(() => fetchRemote(), [fetchRemote]);
+
   // Hydrate: local cache first, then Supabase
   useEffect(() => {
     let mounted = true;
@@ -56,40 +99,7 @@ export function ScansProvider({ children }) {
       } catch {}
 
       // Sync from Supabase (not for guests)
-      if (!isGuest && isSupabaseConfigured && user?.id) {
-        console.log('[DASHBOARD] Fetching scans...');
-        setSyncing(true);
-        setSyncError(null);
-        try {
-          const { data, error } = await withRequestTimeout((signal) => supabase
-            .from('scans')
-            .select('*')
-            .eq('user_id', user.id)
-            .order('created_at', { ascending: false })
-            .abortSignal(signal));
-          if (error) throw error;
-
-          if (data && mounted) {
-            console.log('[DASHBOARD] Scans loaded:', data.length);
-            const remoteScans = data.map((row) => ({
-              id: row.id,
-              createdAt: row.created_at,
-              testId: row.test_id || '',
-              studentName: row.student_name || '',
-              score: row.score || 0,
-              maxScore: row.max_score || 0,
-              percentage: row.percentage || 0,
-              ...(row.data || {}),
-            }));
-            setScans(remoteScans);
-          }
-        } catch (e) {
-          console.log('[DASHBOARD] Scans request failed:', e?.message || e);
-          if (mounted) setSyncError(e);
-        } finally {
-          if (mounted) setSyncing(false);
-        }
-      }
+      await fetchRemote(() => mounted);
 
       if (mounted) setHydrated(true);
     })();
@@ -157,7 +167,7 @@ export function ScansProvider({ children }) {
     }
   }, [user, isGuest]);
 
-  const value = useMemo(() => ({ scans, addScan, deleteScan, syncing, syncError, guestTestsRemaining }), [scans, addScan, deleteScan, syncing, syncError, guestTestsRemaining]);
+  const value = useMemo(() => ({ scans, addScan, deleteScan, syncing, syncError, hydrated, refresh, guestTestsRemaining }), [scans, addScan, deleteScan, syncing, syncError, hydrated, refresh, guestTestsRemaining]);
 
   return (
     <ScansContext.Provider value={value}>

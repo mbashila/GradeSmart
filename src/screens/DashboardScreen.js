@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, useWindowDimensions, Platform, Alert, TouchableOpacity } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, useWindowDimensions, Platform, Alert, TouchableOpacity, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
 import PressableScale from '../components/PressableScale';
-import { Skeleton } from '../components/Skeleton';
+import ErrorState from '../components/ErrorState';
+import { DashboardStatsSkeleton, DashboardRecentScansSkeleton } from './skeletons/DashboardSkeleton';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useNotifications } from '../context/NotificationsContext';
@@ -22,8 +23,8 @@ export default function DashboardScreen({ navigation }) {
   const { unreadCount } = useNotifications();
   const { width } = useWindowDimensions();
   const isTablet = width >= 900;
-  const { scans, syncing: scansSyncing, syncError: scansError, guestTestsRemaining } = useScans();
-  const { tests, deleteTest, syncing: testsSyncing, syncError: testsError } = useTests();
+  const { scans, syncing: scansSyncing, syncError: scansError, hydrated: scansHydrated, refresh: refreshScans, guestTestsRemaining } = useScans();
+  const { tests, deleteTest, syncing: testsSyncing, syncError: testsError, hydrated: testsHydrated, refresh: refreshTests } = useTests();
   const { user, isGuest, signOut } = useAuth();
   const { isLiked, toggleLike } = useLikes();
 
@@ -32,8 +33,28 @@ export default function DashboardScreen({ navigation }) {
     isGuest ? null : user?.id,
     () => signOut() // force logout callback
   );
-  const loading = scansSyncing || testsSyncing;
-  const syncError = !loading && (scansError || testsError);
+  const [refreshing, setRefreshing] = useState(false);
+  const syncing = scansSyncing || testsSyncing;
+  const hasData = scans.length > 0 || tests.length > 0;
+  // Skeletons only cover the first load with nothing cached; refreshes keep
+  // the current content on screen.
+  const statsLoading = !refreshing && !hasData && (syncing || !scansHydrated || !testsHydrated);
+  const recentLoading = !refreshing && scans.length === 0 && (scansSyncing || !scansHydrated);
+  const syncError = !syncing && (scansError || testsError);
+
+  const retrySync = useCallback(
+    () => Promise.all([refreshTests(), refreshScans()]),
+    [refreshTests, refreshScans]
+  );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await retrySync();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [retrySync]);
   const displayName = React.useMemo(() => {
     if (isGuest) return 'Guest';
     const name = user?.user_metadata?.full_name || '';
@@ -85,6 +106,14 @@ export default function DashboardScreen({ navigation }) {
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={isGuest ? undefined : (
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.secondary}
+            colors={[colors.secondary]}
+          />
+        )}
       >
         {isTablet ? (
           <View style={styles.tabletRow}>
@@ -206,16 +235,15 @@ export default function DashboardScreen({ navigation }) {
                   </View>
                 )}
 
-                {loading ? (
-                  <View style={styles.statsRow}>
-                    {[1, 2, 3].map((i) => (
-                      <View key={i} style={styles.statCard}>
-                        <Skeleton width={32} height={32} radius={16} style={{ marginBottom: 6 }} />
-                        <Skeleton width={30} height={20} style={{ marginBottom: 4 }} />
-                        <Skeleton width={50} height={12} />
-                      </View>
-                    ))}
-                  </View>
+                {statsLoading ? (
+                  <DashboardStatsSkeleton styles={styles} />
+                ) : syncError && !hasData ? (
+                  <ErrorState
+                    title="Unable to load your dashboard"
+                    message="We couldn't reach the server. Check your connection and try again."
+                    onRetry={retrySync}
+                    retrying={syncing}
+                  />
                 ) : (
                   <View style={styles.statsRow}>
                     <View style={styles.statCard}>
@@ -241,8 +269,13 @@ export default function DashboardScreen({ navigation }) {
                     </View>
                   </View>
                 )}
-                {!!syncError && (
-                  <Text style={styles.syncErrorText}>Couldn't sync with the server. Showing saved data.</Text>
+                {!!syncError && hasData && (
+                  <ErrorState
+                    compact
+                    message="Couldn't sync with the server. Showing saved data."
+                    onRetry={retrySync}
+                    retrying={syncing}
+                  />
                 )}
               </View>
             </AnimatedScreen>
@@ -341,21 +374,15 @@ export default function DashboardScreen({ navigation }) {
         <AnimatedScreen delay={300}>
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Recent Scans</Text>
-            {loading ? (
-              [1, 2].map((i) => (
-                <Card key={i} style={styles.testCard}>
-                  <View style={styles.testCardHeader}>
-                    <View style={styles.testCardInfo}>
-                      <Skeleton width={'60%'} height={16} style={{ marginBottom: 6 }} />
-                      <Skeleton width={'40%'} height={12} />
-                    </View>
-                  </View>
-                  <View style={styles.testCardFooter}>
-                    <Skeleton width={80} height={14} />
-                    <Skeleton width={20} height={20} radius={10} />
-                  </View>
-                </Card>
-              ))
+            {recentLoading ? (
+              <DashboardRecentScansSkeleton styles={styles} />
+            ) : scansError && scans.length === 0 ? (
+              <ErrorState
+                compact
+                message="Couldn't load your recent scans."
+                onRetry={retrySync}
+                retrying={syncing}
+              />
             ) : recentScansList.length === 0 ? (
               <Card style={[styles.testCard, { alignItems: 'center' }] }>
                 <Ionicons name="scan-outline" size={40} color={colors.secondary} />

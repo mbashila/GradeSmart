@@ -4,7 +4,13 @@ import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import AnimatedScreen from '../components/AnimatedScreen';
 import PressableScale from '../components/PressableScale';
-import { Skeleton, SkeletonCircle } from '../components/Skeleton';
+import ErrorState from '../components/ErrorState';
+import {
+  AdminQuickRowSkeleton,
+  AdminMetricValueSkeleton,
+  AdminActiveUsersSkeleton,
+  AdminQueryRowsSkeleton,
+} from './skeletons/AdminSkeletons';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useAdmin } from '../context/AdminContext';
@@ -19,9 +25,13 @@ const PERIODS = [
 export default function AdminDashboardScreen({ navigation }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const { stats, fetchStats, fetchUsers, fetchActiveUsers, fetchQueries, users, activeUsers, queries, loading } = useAdmin();
+  const { stats, fetchStats, fetchUsers, fetchActiveUsers, fetchQueries, users, activeUsers, queries, status } = useAdmin();
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState('day');
+  const isPending = (key) => !status[key].loaded && !status[key].error;
+  const statsPending = !stats && isPending('stats');
+  const activeUsersPending = !refreshing && (status.activeUsers.loading || isPending('activeUsers'));
+  const queriesPending = !refreshing && queries.length === 0 && (status.queries.loading || isPending('queries'));
 
   useEffect(() => {
     fetchStats();
@@ -75,15 +85,15 @@ export default function AdminDashboardScreen({ navigation }) {
       >
         {/* Quick action buttons - horizontal row */}
         <AnimatedScreen>
-          {!stats && loading ? (
-            <View style={styles.quickRow}>
-              {[1,2,3,4,5].map(i => (
-                <View key={i} style={styles.quickItem}>
-                  <Skeleton width={68} height={68} radius={18} />
-                  <Skeleton width={48} height={10} style={{ marginTop: 8 }} />
-                </View>
-              ))}
-            </View>
+          {statsPending ? (
+            <AdminQuickRowSkeleton styles={styles} />
+          ) : !stats && status.stats.error ? (
+            <ErrorState
+              style={{ marginHorizontal: 16, marginTop: 12 }}
+              title="Unable to load admin stats"
+              onRetry={fetchStats}
+              retrying={status.stats.loading}
+            />
           ) : (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickRow}>
               {quickButtons.map(btn => (
@@ -121,21 +131,21 @@ export default function AdminDashboardScreen({ navigation }) {
                 <View style={[styles.analyticsIconWrap, { backgroundColor: '#EEF0FF' }]}>
                   <Ionicons name="people" size={22} color="#4A6CF7" />
                 </View>
-                <Text style={styles.analyticsValue}>{periodStats.users[period] ?? 0}</Text>
+                {statsPending ? <AdminMetricValueSkeleton /> : <Text style={styles.analyticsValue}>{periodStats.users[period] ?? 0}</Text>}
                 <Text style={styles.analyticsLabel}>New Users</Text>
               </View>
               <View style={styles.analyticsBox}>
                 <View style={[styles.analyticsIconWrap, { backgroundColor: '#E8F5E9' }]}>
                   <Ionicons name="scan" size={22} color="#43A047" />
                 </View>
-                <Text style={styles.analyticsValue}>{periodStats.scans[period] ?? 0}</Text>
+                {statsPending ? <AdminMetricValueSkeleton /> : <Text style={styles.analyticsValue}>{periodStats.scans[period] ?? 0}</Text>}
                 <Text style={styles.analyticsLabel}>Scans</Text>
               </View>
               <View style={styles.analyticsBox}>
                 <View style={[styles.analyticsIconWrap, { backgroundColor: '#FFF8E1' }]}>
                   <Ionicons name="folder" size={22} color="#FFB300" />
                 </View>
-                <Text style={styles.analyticsValue}>{periodStats.tests[period] ?? 0}</Text>
+                {statsPending ? <AdminMetricValueSkeleton /> : <Text style={styles.analyticsValue}>{periodStats.tests[period] ?? 0}</Text>}
                 <Text style={styles.analyticsLabel}>Tests</Text>
               </View>
             </View>
@@ -146,7 +156,16 @@ export default function AdminDashboardScreen({ navigation }) {
         <AnimatedScreen delay={160}>
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Most Active Users</Text>
-            {activeUsers.length === 0 ? (
+            {activeUsersPending ? (
+              <AdminActiveUsersSkeleton styles={styles} />
+            ) : status.activeUsers.error && activeUsers.length === 0 ? (
+              <ErrorState
+                compact
+                message="Couldn't load activity data."
+                onRetry={() => fetchActiveUsers(period)}
+                retrying={status.activeUsers.loading}
+              />
+            ) : activeUsers.length === 0 ? (
               <View style={styles.emptyInner}>
                 <Ionicons name="analytics-outline" size={28} color={colors.textLight} />
                 <Text style={styles.emptyText}>No activity data yet</Text>
@@ -185,7 +204,16 @@ export default function AdminDashboardScreen({ navigation }) {
                 <Text style={styles.seeAll}>See All</Text>
               </PressableScale>
             </View>
-            {openQueries.length === 0 ? (
+            {queriesPending ? (
+              <AdminQueryRowsSkeleton styles={styles} />
+            ) : status.queries.error && queries.length === 0 ? (
+              <ErrorState
+                compact
+                message="Couldn't load support queries."
+                onRetry={() => fetchQueries('all')}
+                retrying={status.queries.loading}
+              />
+            ) : openQueries.length === 0 ? (
               <View style={styles.emptyInner}>
                 <Ionicons name="chatbubble-ellipses-outline" size={32} color={colors.textLight} />
                 <Text style={styles.emptyText}>No open queries</Text>

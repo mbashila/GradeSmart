@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Image } fr
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { Skeleton, SkeletonCircle } from '../components/Skeleton';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 
@@ -13,12 +12,7 @@ const BUILD_NUMBER = '1';
 export default function AppVersionScreen({ navigation }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 400);
-    return () => clearTimeout(t);
-  }, []);
 
   const infoRows = [
     { icon: 'code-slash-outline', label: 'Version', value: `v${APP_VERSION}` },
@@ -36,37 +30,6 @@ export default function AppVersionScreen({ navigation }) {
       <Header title="App Version" onBack={() => navigation.goBack()} />
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <AnimatedScreen>
-          {loading ? (
-            <>
-              <View style={styles.heroSection}>
-                <SkeletonCircle size={80} />
-                <Skeleton width={140} height={24} style={{ marginTop: 14 }} />
-              </View>
-              <View style={styles.card}>
-                <Skeleton width={140} height={16} style={{ marginBottom: 12 }} />
-                {[1,2].map(i => (
-                  <View key={i} style={[styles.row, i < 2 && styles.rowBorder]}>
-                    <View style={styles.rowLeft}>
-                      <Skeleton width={32} height={32} radius={8} />
-                      <Skeleton width={90} height={14} style={{ marginLeft: 12 }} />
-                    </View>
-                    <Skeleton width={50} height={14} />
-                  </View>
-                ))}
-              </View>
-              <View style={styles.card}>
-                <Skeleton width={60} height={16} style={{ marginBottom: 12 }} />
-                {[1,2,3].map(i => (
-                  <View key={i} style={[styles.row, i < 3 && styles.rowBorder]}>
-                    <View style={styles.rowLeft}>
-                      <Skeleton width={32} height={32} radius={8} />
-                      <Skeleton width={130} height={14} style={{ marginLeft: 12 }} />
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </>
-          ) : (
             <>
               {/* Logo & App name */}
               <View style={styles.heroSection}>
@@ -115,7 +78,6 @@ export default function AppVersionScreen({ navigation }) {
               <Text style={styles.footer}>© {new Date().getFullYear()} GradeSmart. All rights reserved.</Text>
               <Text style={styles.createdBy}>NkUnDeJi & KuWuNdA mbashila</Text>
             </>
-          )}
         </AnimatedScreen>
       </ScrollView>
     </View>

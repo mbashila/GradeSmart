@@ -1,5 +1,8 @@
 import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, withRequestTimeout } from '../lib/supabase';
+
+const IDLE = { loading: false, loaded: false, error: null };
+const INITIAL_STATUS = { users: IDLE, stats: IDLE, queries: IDLE, activeUsers: IDLE };
 
 const AdminContext = createContext({
   users: [],
@@ -7,6 +10,7 @@ const AdminContext = createContext({
   queries: [],
   activeUsers: [],
   loading: false,
+  status: INITIAL_STATUS,
   fetchUsers: async () => {},
   fetchStats: async () => {},
   fetchQueries: async () => {},
@@ -21,66 +25,47 @@ export function AdminProvider({ children }) {
   const [stats, setStats] = useState(null);
   const [queries, setQueries] = useState([]);
   const [activeUsers, setActiveUsers] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState(INITIAL_STATUS);
 
-  const fetchUsers = useCallback(async () => {
-    if (!isSupabaseConfigured) return;
-    setLoading(true);
-    try {
-      const { data, error } = await supabase.rpc('admin_get_users');
-      if (error) {
-        console.log('Admin fetchUsers error:', error);
-        return;
-      }
-      setUsers(data || []);
-    } catch (e) {
-      console.log('Admin fetchUsers exception:', e);
-    } finally {
-      setLoading(false);
-    }
+  const setResourceStatus = useCallback((key, patch) => {
+    setStatus((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
   }, []);
 
-  const fetchStats = useCallback(async () => {
+  // Runs one admin RPC with a loading -> success | error lifecycle so screens
+  // can tell a pending request from a failed one.
+  const runRpc = useCallback(async (key, fn, args, onData) => {
     if (!isSupabaseConfigured) return;
+    setResourceStatus(key, { loading: true, error: null });
     try {
-      const { data, error } = await supabase.rpc('admin_get_stats');
-      if (error) {
-        console.log('Admin fetchStats error:', error);
-        return;
-      }
-      setStats(data || null);
+      const { data, error } = await withRequestTimeout((signal) => supabase.rpc(fn, args).abortSignal(signal));
+      if (error) throw error;
+      onData(data);
+      setResourceStatus(key, { loading: false, loaded: true, error: null });
     } catch (e) {
-      console.log('Admin fetchStats exception:', e);
+      console.log(`Admin ${fn} error:`, e?.message || e);
+      setResourceStatus(key, { loading: false, error: e });
     }
-  }, []);
+  }, [setResourceStatus]);
 
-  const fetchQueries = useCallback(async (status = 'all') => {
-    if (!isSupabaseConfigured) return;
-    try {
-      const { data, error } = await supabase.rpc('admin_get_queries', { p_status: status });
-      if (error) {
-        console.log('Admin fetchQueries error:', error);
-        return;
-      }
-      setQueries(data || []);
-    } catch (e) {
-      console.log('Admin fetchQueries exception:', e);
-    }
-  }, []);
+  const fetchUsers = useCallback(
+    () => runRpc('users', 'admin_get_users', undefined, (data) => setUsers(data || [])),
+    [runRpc]
+  );
 
-  const fetchActiveUsers = useCallback(async (period = 'week') => {
-    if (!isSupabaseConfigured) return;
-    try {
-      const { data, error } = await supabase.rpc('admin_get_active_users', { p_period: period });
-      if (error) {
-        console.log('Admin fetchActiveUsers error:', error);
-        return;
-      }
-      setActiveUsers(data || []);
-    } catch (e) {
-      console.log('Admin fetchActiveUsers exception:', e);
-    }
-  }, []);
+  const fetchStats = useCallback(
+    () => runRpc('stats', 'admin_get_stats', undefined, (data) => setStats(data || null)),
+    [runRpc]
+  );
+
+  const fetchQueries = useCallback(
+    (queryStatus = 'all') => runRpc('queries', 'admin_get_queries', { p_status: queryStatus }, (data) => setQueries(data || [])),
+    [runRpc]
+  );
+
+  const fetchActiveUsers = useCallback(
+    (period = 'week') => runRpc('activeUsers', 'admin_get_active_users', { p_period: period }, (data) => setActiveUsers(data || [])),
+    [runRpc]
+  );
 
   const updateUserRole = useCallback(async (targetUserId, newRole) => {
     if (!isSupabaseConfigured) return { error: { message: 'Not configured' } };
@@ -141,7 +126,8 @@ export function AdminProvider({ children }) {
     stats,
     queries,
     activeUsers,
-    loading,
+    loading: status.users.loading,
+    status,
     fetchUsers,
     fetchStats,
     fetchQueries,
@@ -149,7 +135,7 @@ export function AdminProvider({ children }) {
     updateUserRole,
     toggleBan,
     replyToQuery,
-  }), [users, stats, queries, activeUsers, loading, fetchUsers, fetchStats, fetchQueries, fetchActiveUsers, updateUserRole, toggleBan, replyToQuery]);
+  }), [users, stats, queries, activeUsers, status, fetchUsers, fetchStats, fetchQueries, fetchActiveUsers, updateUserRole, toggleBan, replyToQuery]);
 
   return (
     <AdminContext.Provider value={value}>

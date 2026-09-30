@@ -195,7 +195,10 @@ export default function LoginScreen({ navigation }) {
                 disabled={loading}
               >
                 {loading ? (
-                  <ActivityIndicator size="small" color="#fff" />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={styles.signInButtonText}>{isPhone ? 'Sending code...' : 'Signing in...'}</Text>
+                  </View>
                 ) : (
                   <Text style={styles.signInButtonText}>{isPhone ? 'Send Code' : 'Sign In'}</Text>
                 )}

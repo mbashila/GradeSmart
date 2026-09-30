@@ -10,7 +10,26 @@ const TestsContext = createContext({
   deleteTest: () => {},
   syncing: false,
   syncError: null,
+  hydrated: false,
+  refresh: async () => {},
 });
+
+function mapTestRow(row) {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    title: row.title || '',
+    subject: row.subject || '',
+    grade: row.grade || '',
+    questionType: row.question_type || 'mcq',
+    numberOfQuestions: row.number_of_questions || 0,
+    totalPoints: row.total_points || 0,
+    markingKey: row.marking_key || '',
+    mcqCount: row.mcq_count || 0,
+    numberOfStudents: row.data?.numberOfStudents || 0,
+    ...(row.data || {}),
+  };
+}
 
 export function TestsProvider({ children }) {
   const [tests, setTests] = useState([]);
@@ -20,6 +39,34 @@ export function TestsProvider({ children }) {
   const { user, isGuest } = useAuth();
 
   const STORAGE_KEY = isGuest ? '@gradesmart:tests:guest' : '@gradesmart:tests';
+
+  const fetchRemote = useCallback(async (isCurrent = () => true) => {
+    if (isGuest || !isSupabaseConfigured || !user?.id) return;
+    console.log('[DASHBOARD] Fetching tests...');
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const { data, error } = await withRequestTimeout((signal) => supabase
+        .from('tests')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .abortSignal(signal));
+      if (error) throw error;
+
+      if (data && isCurrent()) {
+        console.log('[DASHBOARD] Tests loaded:', data.length);
+        setTests(data.map(mapTestRow));
+      }
+    } catch (e) {
+      console.log('[DASHBOARD] Tests request failed:', e?.message || e);
+      if (isCurrent()) setSyncError(e);
+    } finally {
+      if (isCurrent()) setSyncing(false);
+    }
+  }, [user?.id, isGuest]);
+
+  const refresh = useCallback(() => fetchRemote(), [fetchRemote]);
 
   // Hydrate: try Supabase first, fall back to local cache
   useEffect(() => {
@@ -39,44 +86,7 @@ export function TestsProvider({ children }) {
       } catch {}
 
       // Then sync from Supabase if available (not for guests)
-      if (!isGuest && isSupabaseConfigured && user?.id) {
-        console.log('[DASHBOARD] Fetching tests...');
-        setSyncing(true);
-        setSyncError(null);
-        try {
-          const { data, error } = await withRequestTimeout((signal) => supabase
-            .from('tests')
-            .select('*')
-            .eq('user_id', user.id)
-            .order('created_at', { ascending: false })
-            .abortSignal(signal));
-          if (error) throw error;
-
-          if (data && mounted) {
-            console.log('[DASHBOARD] Tests loaded:', data.length);
-            const remoteTests = data.map((row) => ({
-              id: row.id,
-              createdAt: row.created_at,
-              title: row.title || '',
-              subject: row.subject || '',
-              grade: row.grade || '',
-              questionType: row.question_type || 'mcq',
-              numberOfQuestions: row.number_of_questions || 0,
-              totalPoints: row.total_points || 0,
-              markingKey: row.marking_key || '',
-              mcqCount: row.mcq_count || 0,
-              numberOfStudents: row.data?.numberOfStudents || 0,
-              ...(row.data || {}),
-            }));
-            setTests(remoteTests);
-          }
-        } catch (e) {
-          console.log('[DASHBOARD] Tests request failed:', e?.message || e);
-          if (mounted) setSyncError(e);
-        } finally {
-          if (mounted) setSyncing(false);
-        }
-      }
+      await fetchRemote(() => mounted);
 
       if (mounted) setHydrated(true);
     })();
@@ -156,7 +166,7 @@ export function TestsProvider({ children }) {
     }
   }, [user, isGuest]);
 
-  const value = useMemo(() => ({ tests, addTest, updateTest, deleteTest, syncing, syncError }), [tests, addTest, updateTest, deleteTest, syncing, syncError]);
+  const value = useMemo(() => ({ tests, addTest, updateTest, deleteTest, syncing, syncError, hydrated, refresh }), [tests, addTest, updateTest, deleteTest, syncing, syncError, hydrated, refresh]);
 
   return (
     <TestsContext.Provider value={value}>

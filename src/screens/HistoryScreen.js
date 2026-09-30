@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  RefreshControl,
   View,
   Text,
   StyleSheet,
@@ -11,7 +12,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import Header from "../components/Header";
 import Card from "../components/Card";
-import Skeleton, { SkeletonCircle } from "../components/Skeleton";
+import ErrorState from "../components/ErrorState";
+import { HistoryTestsSkeleton, HistorySummaryValueSkeleton } from "./skeletons/HistorySkeleton";
 import AnimatedScreen from "../components/AnimatedScreen";
 import { useColors } from '../context/ThemeContext';
 import { typography } from "../theme/typography";
@@ -23,9 +25,26 @@ export default function HistoryScreen({ navigation }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const [selectedFilter, setSelectedFilter] = useState("all"); // 'all', 'recent', 'by-subject'
-  const [loading, setLoading] = useState(true);
-  const { tests } = useTests();
-  const { scans } = useScans();
+  const { tests, hydrated: testsHydrated, syncing: testsSyncing, syncError: testsError, refresh: refreshTests } = useTests();
+  const { scans, hydrated: scansHydrated, syncing: scansSyncing, syncError: scansError, refresh: refreshScans } = useScans();
+  const [refreshing, setRefreshing] = useState(false);
+  const syncing = testsSyncing || scansSyncing;
+  const loading = !refreshing && tests.length === 0 && (syncing || !testsHydrated || !scansHydrated);
+  const syncError = !syncing && (testsError || scansError);
+
+  const retrySync = useCallback(
+    () => Promise.all([refreshTests(), refreshScans()]),
+    [refreshTests, refreshScans]
+  );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await retrySync();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [retrySync]);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -93,10 +112,6 @@ export default function HistoryScreen({ navigation }) {
     return Math.round(nums.reduce((a, b) => a + b, 0) / nums.length);
   }, [scans]);
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 650);
-    return () => clearTimeout(t);
-  }, []);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -125,6 +140,14 @@ export default function HistoryScreen({ navigation }) {
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.secondary}
+              colors={[colors.secondary]}
+            />
+          }
         >
         {/* Summary Statistics */}
         <AnimatedScreen>
@@ -132,17 +155,17 @@ export default function HistoryScreen({ navigation }) {
             <Card style={styles.summaryCard}>
               <View style={styles.summaryRow}>
                 <View style={styles.summaryItem}>
-                  <Text style={styles.summaryValue}>{totalTests}</Text>
+                  {loading ? <HistorySummaryValueSkeleton /> : <Text style={styles.summaryValue}>{totalTests}</Text>}
                   <Text style={styles.summaryLabel}>Tests</Text>
                 </View>
                 <View style={styles.summaryDivider} />
                 <View style={styles.summaryItem}>
-                  <Text style={styles.summaryValue}>{totalScans}</Text>
+                  {loading ? <HistorySummaryValueSkeleton /> : <Text style={styles.summaryValue}>{totalScans}</Text>}
                   <Text style={styles.summaryLabel}>Scans</Text>
                 </View>
                 <View style={styles.summaryDivider} />
                 <View style={styles.summaryItem}>
-                  <Text style={styles.summaryValue}>{overallAvg}%</Text>
+                  {loading ? <HistorySummaryValueSkeleton /> : <Text style={styles.summaryValue}>{overallAvg}%</Text>}
                   <Text style={styles.summaryLabel}>Average</Text>
                 </View>
               </View>
@@ -212,32 +235,24 @@ export default function HistoryScreen({ navigation }) {
           <View style={styles.testsSection}>
             <Text style={styles.sectionTitle}>{sectionTitleText}</Text>
 
+            {!!syncError && tests.length > 0 && (
+              <ErrorState
+                compact
+                message="Couldn't sync with the server. Showing saved data."
+                onRetry={retrySync}
+                retrying={syncing}
+                style={{ marginTop: 0, marginBottom: 12 }}
+              />
+            )}
+
             {loading ? (
-              [1,2,3,4].map((idx) => (
-                <Card key={idx} style={styles.testCard}>
-                  <View style={styles.testCardHeader}>
-                    <View style={styles.testCardInfo}>
-                      <View style={styles.testCardTitleRow}>
-                        <Skeleton width={'70%'} height={16} />
-                        <Skeleton width={60} height={20} radius={10} style={{ marginLeft: 8 }} />
-                      </View>
-                      <Skeleton width={'35%'} height={12} />
-                    </View>
-                    <Skeleton width={52} height={28} radius={12} />
-                  </View>
-                  <View style={styles.testCardFooter}>
-                    <View style={styles.testCardStat}>
-                      <SkeletonCircle size={16} />
-                      <Skeleton width={40} height={12} style={{ marginLeft: 6 }} />
-                    </View>
-                    <View style={styles.testCardStat}>
-                      <SkeletonCircle size={16} />
-                      <Skeleton width={90} height={12} style={{ marginLeft: 6 }} />
-                    </View>
-                    <Skeleton width={20} height={20} radius={10} />
-                  </View>
-                </Card>
-              ))
+              <HistoryTestsSkeleton styles={styles} />
+            ) : syncError && tests.length === 0 ? (
+              <ErrorState
+                title="Unable to load your tests"
+                onRetry={retrySync}
+                retrying={syncing}
+              />
             ) : enrichedTests.length === 0 ? (
               <Card style={[styles.testCard, { alignItems: 'center' }] }>
                 <Ionicons name="document-text-outline" size={40} color={colors.secondary} />

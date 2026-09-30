@@ -3,7 +3,8 @@ import { View, Text, StyleSheet, FlatList, RefreshControl, TextInput, Alert, Mod
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import PressableScale from '../components/PressableScale';
-import { Skeleton } from '../components/Skeleton';
+import ErrorState from '../components/ErrorState';
+import { AdminQueryCardsSkeleton } from './skeletons/AdminSkeletons';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useAdmin } from '../context/AdminContext';
@@ -18,16 +19,27 @@ const STATUS_FILTERS = [
 export default function AdminQueriesScreen({ navigation }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const { queries, fetchQueries, replyToQuery, loading } = useAdmin();
+  const { queries, fetchQueries, replyToQuery, status } = useAdmin();
   const [filter, setFilter] = useState('open');
   const [refreshing, setRefreshing] = useState(false);
   const [selectedQuery, setSelectedQuery] = useState(null);
   const [replyText, setReplyText] = useState('');
   const [replying, setReplying] = useState(false);
+  const [loadedFilter, setLoadedFilter] = useState(null);
+
+  const loadQueries = useCallback(async (f) => {
+    await fetchQueries(f);
+    setLoadedFilter(f);
+  }, [fetchQueries]);
 
   useEffect(() => {
-    fetchQueries(filter);
+    loadQueries(filter);
   }, [filter]);
+
+  // A filter switch is a new request, so it shows placeholders instead of the
+  // previous filter's results; pull-to-refresh keeps the list visible.
+  const showSkeleton = !refreshing && !status.queries.error && (status.queries.loading || loadedFilter !== filter);
+  const loadError = !refreshing && !status.queries.loading && status.queries.error;
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -112,21 +124,21 @@ export default function AdminQueriesScreen({ navigation }) {
       </View>
 
       <FlatList
-        data={queries}
+        data={showSkeleton || loadError ? [] : queries}
         keyExtractor={(item) => item.id}
         renderItem={renderQuery}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.secondary} />}
         ListEmptyComponent={
-          loading ? (
-            [1,2,3].map(i => (
-              <View key={i} style={styles.queryCard}>
-                <Skeleton width={'70%'} height={16} />
-                <Skeleton width={'90%'} height={14} style={{ marginTop: 8 }} />
-                <Skeleton width={'50%'} height={12} style={{ marginTop: 8 }} />
-              </View>
-            ))
+          showSkeleton ? (
+            <AdminQueryCardsSkeleton styles={styles} />
+          ) : loadError ? (
+            <ErrorState
+              title="Unable to load queries"
+              onRetry={() => loadQueries(filter)}
+              retrying={status.queries.loading}
+            />
           ) : (
             <View style={styles.emptyCard}>
               <Ionicons name="chatbubble-ellipses-outline" size={36} color={colors.textLight} />

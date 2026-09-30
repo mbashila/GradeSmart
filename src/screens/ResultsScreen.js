@@ -7,7 +7,6 @@ import Header from '../components/Header';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { Skeleton } from '../components/Skeleton';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useScans } from '../context/ScansContext';
@@ -21,13 +20,8 @@ export default function ResultsScreen({ navigation, route }) {
   const { scans, addScan } = useScans();
   const { showToast } = useToast();
   const testId = route?.params?.testId || testData?.id || null;
-  const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 500);
-    return () => clearTimeout(t);
-  }, []);
   const normalizedName = (studentName || 'Student').trim().toLowerCase();
   const isExisting = scans?.some((s) => (s.testId === testId) && ((s.studentName || '').trim().toLowerCase() === normalizedName));
 
@@ -260,19 +254,6 @@ export default function ResultsScreen({ navigation, route }) {
         </AnimatedScreen>
         
         <AnimatedScreen delay={60}>
-          {loading ? (
-            <Card style={styles.scoreCard}>
-              <View style={styles.scoreMain}>
-                <View style={styles.scoreLeft}>
-                  <Skeleton width={80} height={40} />
-                  <Skeleton width={100} height={14} style={{ marginTop: 8 }} />
-                </View>
-                <View style={styles.scoreRight}>
-                  <Skeleton width={80} height={80} radius={40} />
-                </View>
-              </View>
-            </Card>
-          ) : (
           <Card style={styles.scoreCard}>
             <View style={styles.scoreMain}>
               <View style={styles.scoreLeft}>
@@ -311,27 +292,13 @@ export default function ResultsScreen({ navigation, route }) {
               </View>
             </View>
           </Card>
-          )}
         </AnimatedScreen>
         
         <AnimatedScreen delay={120}>
           <View style={styles.resultsSection}>
             <Text style={styles.sectionTitle}>Question Results</Text>
             
-            {loading ? [1,2,3,4].map(i => (
-              <Card key={i} style={styles.resultCard}>
-                <View style={styles.resultRow}>
-                  <View style={styles.resultLeft}>
-                    <Skeleton width={100} height={16} />
-                    <View style={[styles.answerRow, { marginTop: 6 }]}>
-                      <Skeleton width={60} height={24} radius={8} />
-                      <Skeleton width={60} height={24} radius={8} style={{ marginLeft: 8 }} />
-                    </View>
-                  </View>
-                  <Skeleton width={36} height={36} radius={18} />
-                </View>
-              </Card>
-            )) : individualResults.map((result, index) => {
+            {individualResults.map((result, index) => {
               const isCorrect = result.status === 'correct';
               const isPartial = result.status === 'partial';
               const statusColor = isCorrect ? colors.success : isPartial ? colors.warning : colors.error;

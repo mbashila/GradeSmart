@@ -199,7 +199,10 @@ export default function SignUpScreen({ navigation }) {
                 disabled={loading}
               >
                 {loading ? (
-                  <ActivityIndicator size="small" color="#fff" />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={styles.signUpButtonText}>{isPhone ? 'Sending code...' : 'Creating account...'}</Text>
+                  </View>
                 ) : (
                   <Text style={styles.signUpButtonText}>{isPhone ? 'Send Code' : 'Sign Up'}</Text>
                 )}
