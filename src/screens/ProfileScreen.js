@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, Alert, TextInput, ActivityIndicator, TouchableOpacity, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { Skeleton } from '../components/Skeleton';
+import { ProfileHeaderSkeleton, ProfileAccountSkeleton } from './skeletons/ProfileSkeleton';
 import { useColors, useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useSubscription } from '../context/SubscriptionContext';
@@ -53,25 +53,7 @@ export default function ProfileScreen({ navigation }) {
 
   const profileLoading = !isGuest && !user;
 
-  const renderSkeletonProfile = () => (
-    <>
-      <View style={styles.sectionCard}>
-        <Skeleton width={'30%'} height={16} style={{ marginBottom: 16 }} />
-        <View style={[styles.settingRow, styles.settingRowBorder]}>
-          <Skeleton width={50} height={14} />
-          <Skeleton width={'55%'} height={14} />
-        </View>
-        <View style={[styles.settingRow, styles.settingRowBorder]}>
-          <Skeleton width={40} height={14} />
-          <Skeleton width={'45%'} height={14} />
-        </View>
-        <View style={styles.settingRow}>
-          <Skeleton width={50} height={14} />
-          <Skeleton width={'40%'} height={14} />
-        </View>
-      </View>
-    </>
-  );
+  const renderSkeletonProfile = () => <ProfileAccountSkeleton styles={styles} />;
 
   const renderGuestProfile = () => (
     <>
@@ -302,7 +284,9 @@ export default function ProfileScreen({ navigation }) {
 
           {/* Profile Header — centered avatar, name, email, edit button */}
           <View style={styles.headerSection}>
-            {isGuest ? (
+            {profileLoading ? (
+              <ProfileHeaderSkeleton styles={styles} />
+            ) : isGuest ? (
               <>
                 <View style={styles.avatarWrapper}>
                   <Ionicons name="person-circle" size={100} color={colors.textLight} />

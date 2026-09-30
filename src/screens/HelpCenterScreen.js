@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking } from 'r
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { Skeleton } from '../components/Skeleton';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 
@@ -53,12 +52,7 @@ export default function HelpCenterScreen({ navigation }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const [expandedIndex, setExpandedIndex] = useState(null);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 450);
-    return () => clearTimeout(t);
-  }, []);
 
   const toggleFAQ = (index) => {
     setExpandedIndex(prev => prev === index ? null : index);
@@ -69,41 +63,6 @@ export default function HelpCenterScreen({ navigation }) {
       <Header title="Help Center" onBack={() => navigation.goBack()} />
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <AnimatedScreen>
-          {loading ? (
-            <>
-              <View style={styles.banner}>
-                <Skeleton width={56} height={56} radius={16} />
-                <View style={[styles.bannerText, { marginLeft: 14 }]}>
-                  <Skeleton width={160} height={20} />
-                  <Skeleton width={240} height={14} style={{ marginTop: 6 }} />
-                </View>
-              </View>
-              <View style={styles.card}>
-                <Skeleton width={200} height={16} style={{ marginBottom: 12 }} />
-                {[1,2,3,4,5].map(i => (
-                  <View key={i} style={[styles.faqItem, i < 5 && styles.rowBorder]}>
-                    <View style={styles.faqHeader}>
-                      <Skeleton width={'80%'} height={16} />
-                    </View>
-                  </View>
-                ))}
-              </View>
-              <View style={styles.card}>
-                <Skeleton width={100} height={16} style={{ marginBottom: 12 }} />
-                {[1,2,3].map(i => (
-                  <View key={i} style={[styles.contactRow, i < 3 && styles.rowBorder]}>
-                    <View style={styles.contactLeft}>
-                      <Skeleton width={32} height={32} radius={8} />
-                      <View style={[styles.contactText, { marginLeft: 12 }]}>
-                        <Skeleton width={100} height={14} />
-                        <Skeleton width={150} height={12} style={{ marginTop: 4 }} />
-                      </View>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </>
-          ) : (
             <>
               {/* Quick help banner */}
               <View style={styles.banner}>
@@ -174,7 +133,6 @@ export default function HelpCenterScreen({ navigation }) {
                 <Text style={styles.bugBtnText}>Report a Bug</Text>
               </TouchableOpacity>
             </>
-          )}
         </AnimatedScreen>
       </ScrollView>
     </View>

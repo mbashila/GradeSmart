@@ -3,7 +3,8 @@ import { View, Text, StyleSheet, FlatList, RefreshControl, TextInput, Alert } fr
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import PressableScale from '../components/PressableScale';
-import { Skeleton } from '../components/Skeleton';
+import ErrorState from '../components/ErrorState';
+import { AdminUsersSkeleton } from './skeletons/AdminSkeletons';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useAdmin } from '../context/AdminContext';
@@ -11,7 +12,7 @@ import { useAdmin } from '../context/AdminContext';
 export default function AdminUsersScreen({ navigation, route }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const { users, fetchUsers, updateUserRole, loading } = useAdmin();
+  const { users, fetchUsers, updateUserRole, loading, status } = useAdmin();
   const promoteMode = route.params?.promoteMode ?? false;
   const initialFilter = route.params?.initialFilter ?? null;
   const [search, setSearch] = useState('');
@@ -165,19 +166,15 @@ export default function AdminUsersScreen({ navigation, route }) {
       </View>
 
       {/* User list */}
-      {loading && users.length === 0 ? (
-        <View style={styles.listContent}>
-          {[1,2,3,4,5].map(i => (
-            <View key={i} style={styles.userRow}>
-              <Skeleton width={44} height={44} radius={22} />
-              <View style={{ marginLeft: 12, flex: 1 }}>
-                <Skeleton width={140} height={14} />
-                <Skeleton width={180} height={12} style={{ marginTop: 4 }} />
-                <Skeleton width={100} height={10} style={{ marginTop: 4 }} />
-              </View>
-            </View>
-          ))}
-        </View>
+      {users.length === 0 && (loading || !status.users.loaded) && !status.users.error ? (
+        <AdminUsersSkeleton styles={styles} />
+      ) : users.length === 0 && status.users.error ? (
+        <ErrorState
+          style={{ marginHorizontal: 24 }}
+          title="Unable to load users"
+          onRetry={fetchUsers}
+          retrying={loading}
+        />
       ) : (
         <FlatList
           data={filtered}

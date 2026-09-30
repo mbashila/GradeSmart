@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, ScrollView, Switch, TouchableOpacity, Alert } f
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import AnimatedScreen from '../components/AnimatedScreen';
-import { Skeleton } from '../components/Skeleton';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 
@@ -14,12 +13,7 @@ export default function PrivacySettingsScreen({ navigation }) {
   const [crashReports, setCrashReports] = useState(true);
   const [personalizedTips, setPersonalizedTips] = useState(true);
   const [saveScansLocally, setSaveScansLocally] = useState(true);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 400);
-    return () => clearTimeout(t);
-  }, []);
 
   const handleDeleteData = () => {
     Alert.alert(
@@ -78,39 +72,6 @@ export default function PrivacySettingsScreen({ navigation }) {
       <Header title="Privacy Settings" onBack={() => navigation.goBack()} />
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <AnimatedScreen>
-          {loading ? (
-            <>
-              <View style={styles.card}>
-                <Skeleton width={130} height={16} style={{ marginBottom: 12 }} />
-                {[1,2,3,4].map(i => (
-                  <View key={i} style={[styles.toggleRow, i < 4 && styles.rowBorder]}>
-                    <View style={styles.toggleLeft}>
-                      <Skeleton width={32} height={32} radius={8} />
-                      <View style={[styles.toggleText, { marginLeft: 12 }]}>
-                        <Skeleton width={120} height={14} />
-                        <Skeleton width={'90%'} height={11} style={{ marginTop: 4 }} />
-                      </View>
-                    </View>
-                    <Skeleton width={48} height={28} radius={14} />
-                  </View>
-                ))}
-              </View>
-              <View style={styles.card}>
-                <Skeleton width={150} height={16} style={{ marginBottom: 12 }} />
-                {[1,2].map(i => (
-                  <View key={i} style={[styles.actionRow, i < 2 && styles.rowBorder]}>
-                    <View style={styles.rowLeft}>
-                      <Skeleton width={32} height={32} radius={8} />
-                      <View style={[styles.toggleText, { marginLeft: 12 }]}>
-                        <Skeleton width={120} height={14} />
-                        <Skeleton width={200} height={11} style={{ marginTop: 4 }} />
-                      </View>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </>
-          ) : (
             <>
               {/* Privacy toggles */}
               <View style={styles.card}>
@@ -173,7 +134,6 @@ export default function PrivacySettingsScreen({ navigation }) {
                 </Text>
               </View>
             </>
-          )}
         </AnimatedScreen>
       </ScrollView>
     </View>
