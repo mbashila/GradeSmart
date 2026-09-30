@@ -1,58 +1,29 @@
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import secureStorage from './secureStorage';
 import { rateLimit } from './security';
 
 const KEY_STORAGE = 'openai_api_key';
-const LEGACY_OPENROUTER_STORAGE = 'openrouter_key';
-const LEGACY_KEY_STORAGE = '@gradesmart_openrouter_key';
 
 const OPENAI_API_URL = 'https://api.openai.com/v1';
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1';
 
 // Read from .env at build time (EXPO_PUBLIC_ prefix), falling back to app.json's
 // `extra` block (Constants.expoConfig.extra) so EAS cloud builds pick up the keys.
 const extras = (Constants?.expoConfig?.extra) || (Constants?.manifest?.extra) || {};
 const ENV_OPENAI_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY || extras.EXPO_PUBLIC_OPENAI_API_KEY || '';
-const ENV_OPENROUTER_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || extras.EXPO_PUBLIC_OPENROUTER_API_KEY || '';
 
-/**
- * Determine which provider to use based on available keys.
- * OpenAI direct is preferred over OpenRouter.
- */
-function getProvider(key, { useFullModel = false } = {}) {
-  if (key && key.startsWith('sk-')) {
-    return { url: OPENAI_API_URL, model: useFullModel ? 'gpt-4o' : 'gpt-4o-mini', isOpenAI: true };
-  }
-  return { url: OPENROUTER_API_URL, model: useFullModel ? 'openai/gpt-4o' : 'openai/gpt-4o-mini', isOpenAI: false };
+function getModelConfig({ useFullModel = false } = {}) {
+  return { url: OPENAI_API_URL, model: useFullModel ? 'gpt-4o' : 'gpt-4o-mini' };
 }
 
 /**
- * Get the API key. Checks .env first (OpenAI then OpenRouter), then SecureStore.
- * Migrates from legacy storage on first read.
+ * Get the OpenAI API key. Checks .env first, then SecureStore.
  */
 export async function getOpenAIKey() {
   if (ENV_OPENAI_KEY) return ENV_OPENAI_KEY;
-  if (ENV_OPENROUTER_KEY) return ENV_OPENROUTER_KEY;
   try {
-    const secureKey = await secureStorage.getItem(KEY_STORAGE);
-    if (secureKey) return secureKey;
-    // Check legacy openrouter key
-    const legacyRouter = await secureStorage.getItem(LEGACY_OPENROUTER_STORAGE);
-    if (legacyRouter) {
-      await secureStorage.setItem(KEY_STORAGE, legacyRouter);
-      return legacyRouter;
-    }
-    // Migrate from legacy AsyncStorage if present
-    const legacyKey = await AsyncStorage.getItem(LEGACY_KEY_STORAGE);
-    if (legacyKey) {
-      await secureStorage.setItem(KEY_STORAGE, legacyKey);
-      await AsyncStorage.removeItem(LEGACY_KEY_STORAGE);
-      return legacyKey;
-    }
-    return '';
+    return (await secureStorage.getItem(KEY_STORAGE)) || '';
   } catch {
     return '';
   }
@@ -76,7 +47,7 @@ export async function checkOpenAIStatus() {
       return { ok: false, hasVision: false, error: 'No API key set.' };
     }
 
-    const provider = getProvider(key);
+    const modelConfig = getModelConfig();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
 
@@ -84,17 +55,13 @@ export async function checkOpenAIStatus() {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${key}`,
     };
-    if (!provider.isOpenAI) {
-      headers['HTTP-Referer'] = 'https://gradesmart.app';
-      headers['X-Title'] = 'GradeSmart';
-    }
 
-    const res = await fetch(`${provider.url}/chat/completions`, {
+    const res = await fetch(`${modelConfig.url}/chat/completions`, {
       method: 'POST',
       headers,
       signal: controller.signal,
       body: JSON.stringify({
-        model: provider.model,
+        model: modelConfig.model,
         messages: [{ role: 'user', content: 'test' }],
         max_tokens: 1,
       }),
@@ -191,7 +158,7 @@ export async function queryOpenAIVision(imageUri, prompt, options = {}) {
     const key = await getOpenAIKey();
     if (!key) return { response: '', error: 'No API key configured. Go to Settings to add it.' };
 
-    const provider = getProvider(key, { useFullModel: true });
+    const modelConfig = getModelConfig({ useFullModel: true });
     const dataUrl = await imageToBase64DataUrl(imageUri, 1400);
 
     const controller = new AbortController();
@@ -201,17 +168,13 @@ export async function queryOpenAIVision(imageUri, prompt, options = {}) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${key}`,
     };
-    if (!provider.isOpenAI) {
-      headers['HTTP-Referer'] = 'https://gradesmart.app';
-      headers['X-Title'] = 'GradeSmart';
-    }
 
-    const res = await fetch(`${provider.url}/chat/completions`, {
+    const res = await fetch(`${modelConfig.url}/chat/completions`, {
       method: 'POST',
       headers,
       signal: controller.signal,
       body: JSON.stringify({
-        model: provider.model,
+        model: modelConfig.model,
         messages: [
           {
             role: 'system',
@@ -266,7 +229,7 @@ export async function queryOpenAIText(prompt, options = {}) {
     const key = await getOpenAIKey();
     if (!key) return { response: '', error: 'No API key configured. Go to Settings to add it.' };
 
-    const provider = getProvider(key);
+    const modelConfig = getModelConfig();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -274,17 +237,13 @@ export async function queryOpenAIText(prompt, options = {}) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${key}`,
     };
-    if (!provider.isOpenAI) {
-      headers['HTTP-Referer'] = 'https://gradesmart.app';
-      headers['X-Title'] = 'GradeSmart';
-    }
 
-    const res = await fetch(`${provider.url}/chat/completions`, {
+    const res = await fetch(`${modelConfig.url}/chat/completions`, {
       method: 'POST',
       headers,
       signal: controller.signal,
       body: JSON.stringify({
-        model: provider.model,
+        model: modelConfig.model,
         messages: [{ role: 'user', content: prompt }],
         max_tokens: maxTokens,
         temperature: 0.1,
@@ -341,7 +300,7 @@ export async function detectAnswersWithAI(imageUri, questionCount, markingKey = 
       };
     }
 
-    const provider = getProvider(key, { useFullModel: true });
+    const modelConfig = getModelConfig({ useFullModel: true });
     // Use higher resolution for MCQ sheets to preserve bubble clarity
     const dataUrl = await imageToBase64DataUrl(imageUri, 1600);
 
@@ -352,10 +311,6 @@ export async function detectAnswersWithAI(imageUri, questionCount, markingKey = 
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${key}`,
     };
-    if (!provider.isOpenAI) {
-      headers['HTTP-Referer'] = 'https://gradesmart.app';
-      headers['X-Title'] = 'GradeSmart';
-    }
 
     const systemPrompt = `You are a helpful teaching assistant tool used by educators to digitize student exam results. Your job is to read multiple-choice answer sheets that teachers photograph after exams, and return the selected answers as structured data. This is a legitimate educational workflow used in schools worldwide to save teachers time on manual grading.`;
 
@@ -377,12 +332,12 @@ No explanation needed, just the JSON.`;
     const makeRequest = async (sysMsg, userMsg) => {
       const reqController = new AbortController();
       const reqTimeout = setTimeout(() => reqController.abort(), 60000);
-      const reqRes = await fetch(`${provider.url}/chat/completions`, {
+      const reqRes = await fetch(`${modelConfig.url}/chat/completions`, {
         method: 'POST',
         headers,
         signal: reqController.signal,
         body: JSON.stringify({
-          model: provider.model,
+          model: modelConfig.model,
           messages: [
             { role: 'system', content: sysMsg },
             {
@@ -1070,7 +1025,7 @@ export async function gradeSectionAnswersWithVision(imageUris, questions, option
     const key = await getOpenAIKey();
     if (!key) return { results: fallbackResults(), error: 'No API key configured. Go to Settings to add it.' };
 
-    const provider = getProvider(key, { useFullModel: true });
+    const modelConfig = getModelConfig({ useFullModel: true });
 
     // Convert all answer pages to base64 data URLs
     const dataUrls = [];
@@ -1141,20 +1096,16 @@ Do not include any explanation outside the JSON.`;
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${key}`,
     };
-    if (!provider.isOpenAI) {
-      headers['HTTP-Referer'] = 'https://gradesmart.app';
-      headers['X-Title'] = 'GradeSmart';
-    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 90000);
 
-    const res = await fetch(`${provider.url}/chat/completions`, {
+    const res = await fetch(`${modelConfig.url}/chat/completions`, {
       method: 'POST',
       headers,
       signal: controller.signal,
       body: JSON.stringify({
-        model: provider.model,
+        model: modelConfig.model,
         messages: [
           {
             role: 'system',
