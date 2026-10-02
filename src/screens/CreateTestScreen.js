@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import Header from '../components/Header';
 import Input from '../components/Input';
+import FormScrollView from '../components/FormScrollView';
 import Button from '../components/Button';
 import AnimatedScreen from '../components/AnimatedScreen';
 import Stepper from '../components/Stepper';
@@ -14,6 +15,10 @@ import { useSubscription, PLANS } from '../context/SubscriptionContext';
 import { useAuth } from '../context/AuthContext';
 
 export default function CreateTestScreen({ navigation, route }) {
+  const classRef = useRef(null);
+  const questionsRef = useRef(null);
+  const pointsRef = useRef(null);
+  const studentsRef = useRef(null);
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { showToast } = useToast();
@@ -68,13 +73,7 @@ export default function CreateTestScreen({ navigation, route }) {
         rightAction="Save"
         onRightPress={handleContinue}
       />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}>
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
+      <FormScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <Stepper steps={['Details', 'Questions', 'Review']} current={0} />
         <AnimatedScreen>
           <View style={styles.content}>
@@ -83,6 +82,10 @@ export default function CreateTestScreen({ navigation, route }) {
             value={testName}
             onChangeText={setTestName}
             placeholder="e.g., Science Exam - Class 6C"
+            autoCapitalize="sentences"
+            returnKeyType="next"
+            submitBehavior="submit"
+            onSubmitEditing={() => classRef.current?.focus()}
             />
             
             <SubjectPicker
@@ -96,31 +99,47 @@ export default function CreateTestScreen({ navigation, route }) {
               label="Class"
               value={classRoom}
               onChangeText={setClassRoom}
+              ref={classRef}
               placeholder="e.g., Grade 5A, Form 2B"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => questionsRef.current?.focus()}
             />
             
             <Input
               label="Number of Questions (approx.)"
               value={numberOfQuestions}
               onChangeText={setNumberOfQuestions}
+              ref={questionsRef}
               placeholder="e.g., 20 or leave blank if unsure"
-              keyboardType="numeric"
+              keyboardType="number-pad"
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => pointsRef.current?.focus()}
             />
             
             <Input
               label="Total Points"
               value={totalPoints}
               onChangeText={setTotalPoints}
+              ref={pointsRef}
               placeholder="100"
               keyboardType="numeric"
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => studentsRef.current?.focus()}
             />
             
             <Input
               label="Number of Students"
               value={numberOfStudents}
               onChangeText={setNumberOfStudents}
+              ref={studentsRef}
               placeholder="e.g., 30"
-              keyboardType="numeric"
+              keyboardType="number-pad"
+              returnKeyType="done"
             />
           </View>
         </AnimatedScreen>
@@ -135,8 +154,7 @@ export default function CreateTestScreen({ navigation, route }) {
             />
           </View>
         </AnimatedScreen>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </FormScrollView>
     </View>
   );
 }

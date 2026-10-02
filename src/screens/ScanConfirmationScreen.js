@@ -1,15 +1,17 @@
-import React from 'react';
-import { View, Text, StyleSheet, Image, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useRef } from 'react';
+import { View, Text, StyleSheet, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
 import Input from '../components/Input';
+import FormScrollView from '../components/FormScrollView';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 
 export default function ScanConfirmationScreen({ navigation, route }) {
+  const studentNumberRef = useRef(null);
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { imageUri, images: imagesParam, sectionImages: sectionImagesParam, testData } = route.params || {};
@@ -55,12 +57,7 @@ export default function ScanConfirmationScreen({ navigation, route }) {
         title="Confirm Scan"
         onBack={handleRetake}
       />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={80}>
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-        >
+      <FormScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <AnimatedScreen>
           <View style={styles.content}>
             <Text style={styles.title}>Scan Preview</Text>
@@ -76,15 +73,22 @@ export default function ScanConfirmationScreen({ navigation, route }) {
               onChangeText={setStudentName}
               placeholder="Enter student name"
               iconName="person-outline"
+              autoCapitalize="words"
+              autoCorrect={false}
               returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => studentNumberRef.current?.focus()}
               style={{ marginBottom: 12 }}
             />
             <Input
               label="Student Number"
               value={studentNumber}
               onChangeText={setStudentNumber}
+              ref={studentNumberRef}
               placeholder="Enter student number (optional)"
               iconName="id-card-outline"
+              autoCapitalize="characters"
+              autoCorrect={false}
               returnKeyType="done"
               style={{ marginBottom: 16 }}
             />
@@ -187,8 +191,7 @@ export default function ScanConfirmationScreen({ navigation, route }) {
             />
           </View>
         </AnimatedScreen>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </FormScrollView>
     </View>
   );
 }

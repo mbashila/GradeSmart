@@ -128,6 +128,9 @@ export default function ReviewCorrectionScreen({ navigation, route }) {
                           value={result.student}
                           onChangeText={(text) => handleAnswerChange(index, text.toUpperCase())}
                           maxLength={1}
+                          autoCapitalize="characters"
+                          autoCorrect={false}
+                          accessibilityLabel={`Student answer for question ${result.question}`}
                           selectTextOnFocus
                         />
                       </View>
@@ -142,6 +145,7 @@ export default function ReviewCorrectionScreen({ navigation, route }) {
                       onChangeText={(text) => handlePointsChange(index, text)}
                       keyboardType="numeric"
                       maxLength={3}
+                      accessibilityLabel={`Points for question ${result.question}`}
                     />
                   </View>
                 </Card>
@@ -154,6 +158,7 @@ export default function ReviewCorrectionScreen({ navigation, route }) {
               <TextInput
                 style={styles.notesInput}
                 placeholder="Add any notes about this grading..."
+                accessibilityLabel="Additional notes"
                 multiline
                 numberOfLines={4}
                 placeholderTextColor={colors.textLight}

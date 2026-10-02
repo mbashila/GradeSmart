@@ -159,9 +159,16 @@ export default function SubjectPicker({ label, value, onSelect, placeholder }) {
                 value={search}
                 onChangeText={setSearch}
                 autoCorrect={false}
+                returnKeyType="search"
+                accessibilityLabel="Search subjects"
               />
               {search ? (
-                <TouchableOpacity onPress={() => setSearch('')}>
+                <TouchableOpacity
+                  onPress={() => setSearch('')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
+                  hitSlop={12}
+                >
                   <Ionicons name="close-circle" size={18} color={colors.textLight} />
                 </TouchableOpacity>
               ) : null}
@@ -196,6 +203,8 @@ export default function SubjectPicker({ label, value, onSelect, placeholder }) {
                   placeholderTextColor={colors.textLight}
                   value={customValue}
                   onChangeText={setCustomValue}
+                  accessibilityLabel="Custom subject"
+                  autoCapitalize="words"
                   autoFocus
                   returnKeyType="done"
                   onSubmitEditing={handleCustomSubmit}

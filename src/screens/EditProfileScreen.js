@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import Header from '../components/Header';
 import Input from '../components/Input';
+import FormScrollView from '../components/FormScrollView';
 import Button from '../components/Button';
 import AnimatedScreen from '../components/AnimatedScreen';
 import { useColors } from '../context/ThemeContext';
@@ -20,13 +21,21 @@ export default function EditProfileScreen({ navigation }) {
   const [location, setLocation] = useState(meta.location || '');
   const [bio, setBio] = useState(meta.bio || '');
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [nameTouched, setNameTouched] = useState(false);
+  const phoneRef = useRef(null);
+  const locationRef = useRef(null);
+  const schoolRef = useRef(null);
+  const bioRef = useRef(null);
 
 
   const handleSave = async () => {
+    if (savingRef.current) return;
     if (!fullName.trim()) {
       Alert.alert('Required', 'Please enter your full name.');
       return;
     }
+    savingRef.current = true;
     setSaving(true);
     const { error } = await updateProfile({
       fullName: fullName.trim(),
@@ -35,6 +44,7 @@ export default function EditProfileScreen({ navigation }) {
       location: location.trim(),
       bio: bio.trim(),
     });
+    savingRef.current = false;
     setSaving(false);
     if (error) {
       Alert.alert('Error', error.message || 'Could not update profile.');
@@ -53,13 +63,7 @@ export default function EditProfileScreen({ navigation }) {
         rightAction={saving ? undefined : 'Save'}
         onRightPress={handleSave}
       />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
+      <FormScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
           <AnimatedScreen>
             <>
             <View style={styles.section}>
@@ -70,19 +74,37 @@ export default function EditProfileScreen({ navigation }) {
                 onChangeText={setFullName}
                 placeholder="e.g., John Doe"
                 autoCapitalize="words"
+                autoComplete="name"
+                textContentType="name"
+                returnKeyType="next"
+                submitBehavior="submit"
+                onSubmitEditing={() => phoneRef.current?.focus()}
+                onBlur={() => setNameTouched(true)}
+                error={nameTouched && !fullName.trim() ? 'Full name is required.' : ''}
+                editable={!saving}
               />
               <Input
                 label="Phone Number"
                 value={phone}
                 onChangeText={setPhone}
+                ref={phoneRef}
                 placeholder="e.g., +27 81 234 5678"
                 keyboardType="phone-pad"
+                returnKeyType="next"
+                submitBehavior="submit"
+                onSubmitEditing={() => locationRef.current?.focus()}
+                editable={!saving}
               />
               <Input
                 label="Location"
                 value={location}
                 onChangeText={setLocation}
+                ref={locationRef}
                 placeholder="e.g., Johannesburg, South Africa"
+                returnKeyType="next"
+                submitBehavior="submit"
+                onSubmitEditing={() => schoolRef.current?.focus()}
+                editable={!saving}
               />
             </View>
 
@@ -92,13 +114,21 @@ export default function EditProfileScreen({ navigation }) {
                 label="School / Institution"
                 value={school}
                 onChangeText={setSchool}
+                ref={schoolRef}
                 placeholder="e.g., Springfield High School"
+                autoCapitalize="words"
+                returnKeyType="next"
+                submitBehavior="submit"
+                onSubmitEditing={() => bioRef.current?.focus()}
+                editable={!saving}
               />
               <Input
                 label="Bio"
                 value={bio}
                 onChangeText={setBio}
+                ref={bioRef}
                 placeholder="Tell us a bit about yourself..."
+                editable={!saving}
                 multiline
                 numberOfLines={3}
               />
@@ -124,8 +154,7 @@ export default function EditProfileScreen({ navigation }) {
               />
             </View>
           </AnimatedScreen>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </FormScrollView>
     </View>
   );
 }

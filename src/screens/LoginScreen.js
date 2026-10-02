@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity, Modal, TextInput, ActivityIndicator } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, StyleSheet, KeyboardAvoidingView, TouchableOpacity, Modal, ActivityIndicator, Keyboard } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import { makeRedirectUri } from 'expo-auth-session';
 import Input from '../components/Input';
+import FormScrollView, { KEYBOARD_AVOIDING_BEHAVIOR } from '../components/FormScrollView';
+import FormMessage from '../components/FormMessage';
 import Logo from '../components/Logo';
 import AnimatedScreen from '../components/AnimatedScreen';
 import { GoogleIcon, AppleIcon, FacebookIcon } from '../components/SocialIcons';
@@ -13,6 +15,8 @@ import { typography } from '../theme/typography';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast';
 import { supabase } from '../lib/supabase';
+import { isPhoneNumber, isValidEmail } from '../utils/security';
+import { getAuthErrorMessage } from '../utils/authErrors';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -21,71 +25,139 @@ export default function LoginScreen({ navigation }) {
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const [identifier, setIdentifier] = useState(''); // email or phone
   const [password, setPassword] = useState('');
+  const [touched, setTouched] = useState({});
+  const [submitted, setSubmitted] = useState(false);
+  const [formError, setFormError] = useState('');
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [resetEmail, setResetEmail] = useState('');
+  const [resetTouched, setResetTouched] = useState(false);
+  const [resetError, setResetError] = useState('');
   const [resetLoading, setResetLoading] = useState(false);
   const [socialLoading, setSocialLoading] = useState(null);
   const [loading, setLoading] = useState(false);
+  const submittingRef = useRef(false);
+  const resetSubmittingRef = useRef(false);
+  const identifierRef = useRef(null);
+  const passwordRef = useRef(null);
   const { signIn, signInWithPhone, signInAsGuest, resetPassword, isConfigured } = useAuth();
   const { showToast } = useToast();
 
-  const isPhone = /^\+?\d[\d\s\-()]{6,}$/.test(identifier.trim());
+  const isPhone = isPhoneNumber(identifier);
+
+  const identifierError = (() => {
+    const trimmed = identifier.trim();
+    if (!trimmed) return 'Enter your email address or phone number.';
+    if (!isPhone && !isValidEmail(trimmed)) return 'Enter a valid email address.';
+    return '';
+  })();
+  const passwordError = !isPhone && !password ? 'Enter your password.' : '';
+  const showIdentifierError = (touched.identifier || submitted) ? identifierError : '';
+  const showPasswordError = (touched.password || submitted) ? passwordError : '';
+
+  const resetEmailError = (() => {
+    const trimmed = resetEmail.trim();
+    if (!trimmed) return 'Enter your email address.';
+    if (!isValidEmail(trimmed)) return 'Enter a valid email address.';
+    return '';
+  })();
+
+  const markTouched = (field) => setTouched((t) => (t[field] ? t : { ...t, [field]: true }));
+
+  const handleIdentifierChange = (text) => {
+    setIdentifier(text);
+    if (formError) setFormError('');
+  };
+
+  const handlePasswordChange = (text) => {
+    setPassword(text);
+    if (formError) setFormError('');
+  };
 
   const handleLogin = async () => {
+    if (submittingRef.current) return;
+    setSubmitted(true);
+    setFormError('');
     if (!isConfigured) {
-      showToast('Supabase not configured. Add your credentials to app.json extra.', 'error');
+      setFormError('Supabase not configured. Add your credentials to app.json extra.');
       return;
     }
+    if (identifierError) {
+      identifierRef.current?.focus();
+      return;
+    }
+    if (passwordError) {
+      passwordRef.current?.focus();
+      return;
+    }
+
     const trimmed = identifier.trim();
-    if (!trimmed) {
-      showToast('Please enter your email or phone number.', 'error');
-      return;
-    }
-
+    submittingRef.current = true;
     setLoading(true);
-
-    if (isPhone) {
-      // Phone OTP login
-      const phone = trimmed.startsWith('+') ? trimmed : `+${trimmed}`;
-      const { error } = await signInWithPhone(phone);
+    Keyboard.dismiss();
+    try {
+      if (isPhone) {
+        // Phone OTP login
+        const phone = trimmed.startsWith('+') ? trimmed : `+${trimmed}`;
+        const { error } = await signInWithPhone(phone);
+        if (error) {
+          setFormError(getAuthErrorMessage(error, 'Could not send the verification code. Please try again.'));
+          return;
+        }
+        navigation.navigate('VerifyOTP', { phone, type: 'login' });
+      } else {
+        // Email + password login
+        const { error } = await signIn({ email: trimmed, password });
+        if (error) {
+          setFormError(getAuthErrorMessage(error, 'Sign-in failed. Please try again.'));
+          return;
+        }
+        showToast('Signed in', 'success');
+        navigation.navigate('Dashboard');
+      }
+    } catch (e) {
+      setFormError(getAuthErrorMessage(e, 'Sign-in failed. Please try again.'));
+    } finally {
+      submittingRef.current = false;
       setLoading(false);
-      if (error) {
-        showToast(error.message || 'Could not send OTP.', 'error');
-        return;
-      }
-      navigation.navigate('VerifyOTP', { phone, type: 'login' });
-    } else {
-      // Email + password login
-      if (!password) {
-        setLoading(false);
-        showToast('Please enter your password.', 'error');
-        return;
-      }
-      const { data, error } = await signIn({ email: trimmed, password });
-      setLoading(false);
-      if (error) {
-        showToast(error.message || 'Sign-in failed', 'error');
-        return;
-      }
-      showToast('Signed in', 'success');
-      navigation.navigate('Dashboard');
     }
   };
 
+  const openForgotModal = () => {
+    setResetEmail(isPhone ? '' : identifier.trim());
+    setResetTouched(false);
+    setResetError('');
+    setShowForgotModal(true);
+  };
+
+  const closeForgotModal = () => {
+    if (resetSubmittingRef.current) return;
+    setShowForgotModal(false);
+    setResetEmail('');
+    setResetTouched(false);
+    setResetError('');
+  };
+
   const handleForgotPassword = async () => {
-    if (!resetEmail.trim()) {
-      showToast('Please enter your email address.', 'error');
-      return;
-    }
+    if (resetSubmittingRef.current) return;
+    setResetTouched(true);
+    setResetError('');
+    if (resetEmailError) return;
+    resetSubmittingRef.current = true;
     setResetLoading(true);
-    const { error } = await resetPassword(resetEmail.trim());
-    setResetLoading(false);
-    if (error) {
-      showToast(error.message || 'Could not send reset email.', 'error');
-    } else {
-      showToast('Password reset email sent! Check your inbox.', 'success');
-      setShowForgotModal(false);
-      setResetEmail('');
+    try {
+      const { error } = await resetPassword(resetEmail.trim());
+      if (error) {
+        setResetError(getAuthErrorMessage(error, 'Could not send the reset email. Please try again.'));
+        return;
+      }
+      resetSubmittingRef.current = false;
+      showToast('If an account exists for that email, a reset link is on its way.', 'success', 3500);
+      closeForgotModal();
+    } catch (e) {
+      setResetError(getAuthErrorMessage(e, 'Could not send the reset email. Please try again.'));
+    } finally {
+      resetSubmittingRef.current = false;
+      setResetLoading(false);
     }
   };
 
@@ -135,15 +207,7 @@ export default function LoginScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
+      <FormScrollView contentContainerStyle={styles.scrollContent}>
           <AnimatedScreen>
             <View style={styles.brandingContainer}>
               <Logo size="welcome" />
@@ -155,29 +219,51 @@ export default function LoginScreen({ navigation }) {
             </View>
 
             <View style={styles.formCard}>
+              <FormMessage message={formError} />
+
               <Input
+                ref={identifierRef}
+                label="Email or phone number"
                 value={identifier}
-                onChangeText={setIdentifier}
-                placeholder="Email or Phone Number"
-                keyboardType="default"
-                autoCapitalize="none"
+                onChangeText={handleIdentifierChange}
+                onBlur={() => markTouched('identifier')}
+                placeholder="you@example.com or +260 97 123 4567"
+                keyboardType="email-address"
+                autoComplete="username"
+                textContentType="username"
+                returnKeyType={isPhone ? 'send' : 'next'}
+                submitBehavior={isPhone ? 'blurAndSubmit' : 'submit'}
+                onSubmitEditing={() => (isPhone ? handleLogin() : passwordRef.current?.focus())}
                 iconName={isPhone ? 'call-outline' : 'mail-outline'}
+                error={showIdentifierError}
+                editable={!loading}
                 style={styles.input}
               />
 
               {!isPhone && (
                 <View style={styles.passwordContainer}>
                   <Input
+                    ref={passwordRef}
+                    label="Password"
                     value={password}
-                    onChangeText={setPassword}
-                    placeholder="Password"
+                    onChangeText={handlePasswordChange}
+                    onBlur={() => markTouched('password')}
+                    placeholder="Enter your password"
                     secureTextEntry
+                    autoComplete="current-password"
+                    textContentType="password"
+                    returnKeyType="done"
+                    onSubmitEditing={handleLogin}
                     iconName="lock-closed-outline"
-                    style={styles.input}
+                    error={showPasswordError}
+                    editable={!loading}
+                    style={styles.passwordInput}
                   />
                   <TouchableOpacity
                     style={styles.forgotPassword}
-                    onPress={() => { setResetEmail(identifier); setShowForgotModal(true); }}
+                    onPress={openForgotModal}
+                    accessibilityRole="button"
+                    hitSlop={8}
                   >
                     <Text style={styles.forgotPasswordText}>Forgot password?</Text>
                   </TouchableOpacity>
@@ -193,6 +279,8 @@ export default function LoginScreen({ navigation }) {
                 onPress={handleLogin}
                 activeOpacity={0.8}
                 disabled={loading}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: loading, busy: loading }}
               >
                 {loading ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -268,40 +356,59 @@ export default function LoginScreen({ navigation }) {
               <Text style={styles.guestHint}>Limited to 3 tests</Text>
             </View>
           </AnimatedScreen>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </FormScrollView>
 
       {/* Forgot Password Modal — outside KAV/ScrollView so keyboard works properly */}
-      <Modal visible={showForgotModal} transparent animationType="fade">
+      <Modal visible={showForgotModal} transparent animationType="fade" onRequestClose={closeForgotModal}>
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={KEYBOARD_AVOIDING_BEHAVIOR}
         >
           <TouchableOpacity
             style={styles.modalOverlayDismiss}
             activeOpacity={1}
-            onPress={() => { setShowForgotModal(false); setResetEmail(''); }}
+            onPress={closeForgotModal}
+            accessible={false}
           />
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Reset Password</Text>
+            <Text style={styles.modalTitle} accessibilityRole="header">Reset Password</Text>
             <Text style={styles.modalSubtitle}>Enter your email and we'll send you a reset link.</Text>
-            <TextInput
-              style={styles.modalInput}
+            <FormMessage message={resetError} />
+            <Input
+              label="Email"
               value={resetEmail}
-              onChangeText={setResetEmail}
-              placeholder="Email address"
-              placeholderTextColor={colors.textLight}
+              onChangeText={(text) => { setResetEmail(text); if (resetError) setResetError(''); }}
+              onBlur={() => setResetTouched(true)}
+              placeholder="you@example.com"
               keyboardType="email-address"
-              autoCapitalize="none"
+              returnKeyType="send"
+              onSubmitEditing={handleForgotPassword}
+              iconName="mail-outline"
+              error={resetTouched ? resetEmailError : ''}
+              editable={!resetLoading}
               autoFocus
             />
             <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalCancelBtn} onPress={() => { setShowForgotModal(false); setResetEmail(''); }}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={closeForgotModal}
+                disabled={resetLoading}
+                accessibilityRole="button"
+              >
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.modalSendBtn} onPress={handleForgotPassword} disabled={resetLoading}>
+              <TouchableOpacity
+                style={[styles.modalSendBtn, resetLoading && { opacity: 0.7 }]}
+                onPress={handleForgotPassword}
+                disabled={resetLoading}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: resetLoading, busy: resetLoading }}
+              >
                 {resetLoading ? (
-                  <ActivityIndicator size="small" color="#fff" />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={styles.modalSendText}>Sending...</Text>
+                  </View>
                 ) : (
                   <Text style={styles.modalSendText}>Send Link</Text>
                 )}
@@ -311,7 +418,8 @@ export default function LoginScreen({ navigation }) {
           <TouchableOpacity
             style={styles.modalOverlayDismiss}
             activeOpacity={1}
-            onPress={() => { setShowForgotModal(false); setResetEmail(''); }}
+            onPress={closeForgotModal}
+            accessible={false}
           />
         </KeyboardAvoidingView>
       </Modal>
@@ -373,10 +481,15 @@ const makeStyles = (colors) => StyleSheet.create({
   passwordContainer: {
     marginBottom: 8,
   },
+  passwordInput: {
+    marginBottom: 0,
+  },
   forgotPassword: {
     alignSelf: 'flex-end',
-    marginTop: 8,
-    marginBottom: 16,
+    minHeight: 44,
+    justifyContent: 'center',
+    marginTop: 4,
+    marginBottom: 8,
   },
   forgotPasswordText: {
     ...typography.bodySmall,
@@ -491,22 +604,14 @@ const makeStyles = (colors) => StyleSheet.create({
     color: colors.textSecondary,
     marginBottom: 20,
   },
-  modalInput: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: 14,
-    fontSize: 16,
-    color: colors.text,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: 20,
-  },
   modalActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: 12,
   },
   modalCancelBtn: {
+    minHeight: 44,
+    justifyContent: 'center',
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 8,
@@ -517,6 +622,8 @@ const makeStyles = (colors) => StyleSheet.create({
     fontWeight: '600',
   },
   modalSendBtn: {
+    minHeight: 44,
+    justifyContent: 'center',
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 8,

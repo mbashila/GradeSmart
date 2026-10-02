@@ -136,9 +136,16 @@ export default function AdminUsersScreen({ navigation, route }) {
           onChangeText={setSearch}
           autoCapitalize="none"
           autoCorrect={false}
+          returnKeyType="search"
+          accessibilityLabel="Search users by name or email"
         />
         {search.length > 0 && (
-          <PressableScale onPress={() => setSearch('')}>
+          <PressableScale
+            onPress={() => setSearch('')}
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
             <Ionicons name="close-circle" size={18} color={colors.textLight} />
           </PressableScale>
         )}

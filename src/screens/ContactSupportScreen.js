@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert, Modal, TextInput, KeyboardAvoidingView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import AnimatedScreen from '../components/AnimatedScreen';
 import PressableScale from '../components/PressableScale';
+import { KEYBOARD_AVOIDING_BEHAVIOR } from '../components/FormScrollView';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useAuth } from '../context/AuthContext';
@@ -20,6 +21,7 @@ export default function ContactSupportScreen({ navigation }) {
   const [queryMessage, setQueryMessage] = useState('');
   const [queryPriority, setQueryPriority] = useState('normal');
   const [sending, setSending] = useState(false);
+  const queryMessageRef = useRef(null);
 
   const handleSendQuery = async () => {
     if (!querySubject.trim() || !queryMessage.trim()) {
@@ -172,11 +174,16 @@ export default function ContactSupportScreen({ navigation }) {
 
           {/* Query submission modal */}
           <Modal visible={showQueryModal} animationType="slide" transparent>
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+            <KeyboardAvoidingView behavior={KEYBOARD_AVOIDING_BEHAVIOR} style={styles.modalOverlay}>
               <View style={styles.modalContent}>
                 <View style={styles.modalHeader}>
                   <Text style={styles.modalTitle}>Send a Query</Text>
-                  <PressableScale onPress={() => setShowQueryModal(false)}>
+                  <PressableScale
+                    onPress={() => setShowQueryModal(false)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Close"
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
                     <Ionicons name="close" size={24} color={colors.text} />
                   </PressableScale>
                 </View>
@@ -186,9 +193,19 @@ export default function ContactSupportScreen({ navigation }) {
                   placeholderTextColor={colors.textLight}
                   value={querySubject}
                   onChangeText={setQuerySubject}
+                  accessibilityLabel="Subject"
+                  autoCapitalize="sentences"
+                  returnKeyType="next"
+                  submitBehavior="submit"
+                  onSubmitEditing={() => queryMessageRef.current?.focus()}
+                  editable={!sending}
                 />
                 <TextInput
+                  ref={queryMessageRef}
                   style={[styles.modalInput, styles.modalTextArea]}
+                  accessibilityLabel="Message"
+                  autoCapitalize="sentences"
+                  editable={!sending}
                   placeholder="Describe your issue or question..."
                   placeholderTextColor={colors.textLight}
                   value={queryMessage}

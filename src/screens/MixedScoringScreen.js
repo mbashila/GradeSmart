@@ -574,6 +574,7 @@ export default function MixedScoringScreen({ navigation, route }) {
                       value={String(item.points)}
                       onChangeText={(v) => handleEssayScore(eIndex, v)}
                       keyboardType="number-pad"
+                      accessibilityLabel={`Score for question ${item.question}, out of ${item.maxPoints}`}
                       maxLength={3}
                       selectTextOnFocus
                     />

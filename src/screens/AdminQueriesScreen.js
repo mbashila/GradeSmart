@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, RefreshControl, TextInput, Alert, Modal, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, FlatList, RefreshControl, TextInput, Alert, Modal, KeyboardAvoidingView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import PressableScale from '../components/PressableScale';
+import { KEYBOARD_AVOIDING_BEHAVIOR } from '../components/FormScrollView';
 import ErrorState from '../components/ErrorState';
 import { AdminQueryCardsSkeleton } from './skeletons/AdminSkeletons';
 import { useColors } from '../context/ThemeContext';
@@ -150,11 +151,16 @@ export default function AdminQueriesScreen({ navigation }) {
 
       {/* Reply Modal */}
       <Modal visible={!!selectedQuery} animationType="slide" transparent>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={KEYBOARD_AVOIDING_BEHAVIOR} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Query Detail</Text>
-              <PressableScale onPress={() => setSelectedQuery(null)}>
+              <PressableScale
+                onPress={() => setSelectedQuery(null)}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
                 <Ionicons name="close" size={24} color={colors.text} />
               </PressableScale>
             </View>
@@ -183,6 +189,9 @@ export default function AdminQueriesScreen({ navigation }) {
                   style={styles.replyInput}
                   placeholder="Type your reply..."
                   placeholderTextColor={colors.textLight}
+                  accessibilityLabel="Reply to query"
+                  autoCapitalize="sentences"
+                  editable={!replying}
                   value={replyText}
                   onChangeText={setReplyText}
                   multiline
