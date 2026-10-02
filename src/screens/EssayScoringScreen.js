@@ -413,6 +413,7 @@ export default function EssayScoringScreen({ navigation, route }) {
                     value={String(item.points)}
                     onChangeText={(v) => handleScoreChange(qIndex, v)}
                     keyboardType="number-pad"
+                    accessibilityLabel={`Score for question ${item.question}, out of ${item.maxPoints}`}
                     maxLength={3}
                     selectTextOnFocus
                   />

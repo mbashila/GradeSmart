@@ -12,6 +12,10 @@ export default function PressableScale({
   scaleTo = 0.98,
   duration = 120,
   haptic = false,
+  accessibilityRole,
+  accessibilityLabel,
+  accessibilityHint,
+  accessibilityState,
 }) {
   const scale = useRef(new Animated.Value(1)).current;
   const { enabled: hapticsEnabled } = useHaptics();
@@ -42,6 +46,10 @@ export default function PressableScale({
       onPressOut={handlePressOut}
       disabled={disabled}
       hitSlop={hitSlop}
+      accessibilityRole={accessibilityRole}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={accessibilityState ?? (disabled ? { disabled: true } : undefined)}
     >
       <Animated.View style={[{ transform: [{ scale }] }, containerStyle]}>
         {children}

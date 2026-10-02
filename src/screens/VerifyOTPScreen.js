@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AnimatedScreen from '../components/AnimatedScreen';
@@ -8,6 +8,8 @@ import { typography } from '../theme/typography';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast';
 import { supabase } from '../lib/supabase';
+import { KEYBOARD_AVOIDING_BEHAVIOR } from '../components/FormScrollView';
+import { getAuthErrorMessage } from '../utils/authErrors';
 
 const CODE_LENGTH = 6;
 
@@ -22,6 +24,7 @@ export default function VerifyOTPScreen({ navigation, route }) {
   const [resending, setResending] = useState(false);
   const [countdown, setCountdown] = useState(60);
   const inputs = useRef([]);
+  const verifyingRef = useRef(false);
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -31,12 +34,11 @@ export default function VerifyOTPScreen({ navigation, route }) {
     }
   }, [countdown]);
 
-  useEffect(() => {
-    // Auto-focus the first input
-    setTimeout(() => inputs.current[0]?.focus(), 300);
-  }, []);
-
   const handleChange = (text, index) => {
+    if (text.replace(/[^0-9]/g, '').length > 1) {
+      handlePaste(text);
+      return;
+    }
     // Only take last character (handles paste of single digit)
     const digit = text.replace(/[^0-9]/g, '').slice(-1);
     const newCode = [...code];
@@ -80,11 +82,13 @@ export default function VerifyOTPScreen({ navigation, route }) {
   };
 
   const handleVerify = async (otp) => {
+    if (verifyingRef.current) return;
     const token = otp || code.join('');
     if (token.length < CODE_LENGTH) {
       showToast('Please enter the full verification code.', 'error');
       return;
     }
+    verifyingRef.current = true;
     setVerifying(true);
     try {
       const verifyParams = isPhone
@@ -93,7 +97,7 @@ export default function VerifyOTPScreen({ navigation, route }) {
 
       const { data, error } = await supabase.auth.verifyOtp(verifyParams);
       if (error) {
-        showToast(error.message || 'Verification failed.', 'error');
+        showToast(getAuthErrorMessage(error, 'Verification failed.'), 'error');
         setCode(Array(CODE_LENGTH).fill(''));
         inputs.current[0]?.focus();
       } else {
@@ -101,8 +105,9 @@ export default function VerifyOTPScreen({ navigation, route }) {
         navigation.reset({ index: 0, routes: [{ name: 'Dashboard' }] });
       }
     } catch (e) {
-      showToast('Verification failed. Please try again.', 'error');
+      showToast(getAuthErrorMessage(e, 'Verification failed. Please try again.'), 'error');
     } finally {
+      verifyingRef.current = false;
       setVerifying(false);
     }
   };
@@ -123,7 +128,7 @@ export default function VerifyOTPScreen({ navigation, route }) {
         error = res.error;
       }
       if (error) {
-        showToast(error.message || 'Could not resend code.', 'error');
+        showToast(getAuthErrorMessage(error, 'Could not resend code.'), 'error');
       } else {
         showToast('Code resent!', 'success');
         setCountdown(60);
@@ -145,10 +150,15 @@ export default function VerifyOTPScreen({ navigation, route }) {
     <SafeAreaView style={styles.container} edges={['top']}>
       <KeyboardAvoidingView
         style={styles.keyboardView}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={KEYBOARD_AVOIDING_BEHAVIOR}
       >
         <AnimatedScreen>
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
 
@@ -171,9 +181,13 @@ export default function VerifyOTPScreen({ navigation, route }) {
                 onChangeText={(text) => handleChange(text, index)}
                 onKeyPress={(e) => handleKeyPress(e, index)}
                 keyboardType="number-pad"
-                maxLength={1}
+                maxLength={index === 0 ? CODE_LENGTH : 1}
                 selectTextOnFocus
                 textContentType="oneTimeCode"
+                autoComplete={index === 0 ? 'sms-otp' : 'off'}
+                autoFocus={index === 0}
+                editable={!verifying}
+                accessibilityLabel={`Verification code digit ${index + 1} of ${CODE_LENGTH}`}
               />
             ))}
           </View>
@@ -198,9 +212,14 @@ export default function VerifyOTPScreen({ navigation, route }) {
             onPress={() => handleVerify()}
             disabled={verifying}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: verifying, busy: verifying }}
           >
             {verifying ? (
-              <ActivityIndicator size="small" color="#fff" />
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <ActivityIndicator size="small" color="#fff" />
+                <Text style={styles.verifyBtnText}>Verifying...</Text>
+              </View>
             ) : (
               <Text style={styles.verifyBtnText}>Verify</Text>
             )}

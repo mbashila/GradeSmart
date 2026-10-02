@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import Header from '../components/Header';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import Input from '../components/Input';
+import FormScrollView from '../components/FormScrollView';
 import AnimatedScreen from '../components/AnimatedScreen';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
@@ -13,6 +14,7 @@ import { gradeMCQ } from '../utils/grading';
 import { detectAnswersWithAI, getOpenAIKey } from '../utils/openaiService';
 
 export default function MCQAnswerInputScreen({ navigation, route }) {
+  const studentNumberRef = useRef(null);
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { images: passedImages, testData, studentName: passedName, studentNumber: passedNum } = route.params || {};
@@ -183,8 +185,7 @@ export default function MCQAnswerInputScreen({ navigation, route }) {
     return (
       <View style={styles.container}>
         <Header title="MCQ Grading" onBack={() => navigation.goBack()} />
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+        <FormScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
             <AnimatedScreen>
               <Text style={styles.title}>Grade Student</Text>
               <Text style={styles.subtitle}>
@@ -209,14 +210,21 @@ export default function MCQAnswerInputScreen({ navigation, route }) {
                 onChangeText={setStudentName}
                 placeholder="Enter student name"
                 iconName="person-outline"
+                autoCapitalize="words"
+                autoCorrect={false}
                 returnKeyType="next"
+                submitBehavior="submit"
+                onSubmitEditing={() => studentNumberRef.current?.focus()}
               />
               <Input
                 label="Student Number (optional)"
                 value={studentNumber}
                 onChangeText={setStudentNumber}
+                ref={studentNumberRef}
                 placeholder="Enter student number"
                 iconName="id-card-outline"
+                autoCapitalize="characters"
+                autoCorrect={false}
                 returnKeyType="done"
               />
 
@@ -234,8 +242,7 @@ export default function MCQAnswerInputScreen({ navigation, route }) {
                 </TouchableOpacity>
               </View>
             </AnimatedScreen>
-          </ScrollView>
-        </KeyboardAvoidingView>
+        </FormScrollView>
       </View>
     );
   }

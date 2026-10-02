@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Keyboard } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import { makeRedirectUri } from 'expo-auth-session';
 import Input from '../components/Input';
+import FormScrollView from '../components/FormScrollView';
+import FormMessage from '../components/FormMessage';
+import PasswordRequirements from '../components/PasswordRequirements';
 import Logo from '../components/Logo';
 import AnimatedScreen from '../components/AnimatedScreen';
 import { GoogleIcon, AppleIcon, FacebookIcon } from '../components/SocialIcons';
@@ -13,6 +16,8 @@ import { typography } from '../theme/typography';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast';
 import { supabase } from '../lib/supabase';
+import { isPhoneNumber, isValidEmail, validatePassword, validatePasswordConfirmation } from '../utils/security';
+import { getAuthErrorMessage } from '../utils/authErrors';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -25,10 +30,41 @@ export default function SignUpScreen({ navigation }) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [socialLoading, setSocialLoading] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [touched, setTouched] = useState({});
+  const [submitted, setSubmitted] = useState(false);
+  const [formError, setFormError] = useState('');
+  const submittingRef = useRef(false);
+  const identifierRef = useRef(null);
+  const passwordRef = useRef(null);
+  const confirmRef = useRef(null);
   const { signUp, signInWithPhone, signInAsGuest, isConfigured } = useAuth();
   const { showToast } = useToast();
 
-  const isPhone = /^\+?\d[\d\s\-()]{6,}$/.test(identifier.trim());
+  const isPhone = isPhoneNumber(identifier);
+
+  const identifierError = (() => {
+    const trimmed = identifier.trim();
+    if (!trimmed) return 'Enter your email address or phone number.';
+    if (!isPhone && !isValidEmail(trimmed)) return 'Enter a valid email address.';
+    return '';
+  })();
+  const passwordCheck = validatePassword(password);
+  const confirmCheck = validatePasswordConfirmation(password, confirmPassword);
+  const passwordError = !isPhone && !passwordCheck.valid ? passwordCheck.message : '';
+  const confirmError = !isPhone && !confirmCheck.valid ? confirmCheck.message : '';
+
+  const showIdentifierError = (touched.identifier || submitted) ? identifierError : '';
+  const showPasswordError = (touched.password || submitted) ? passwordError : '';
+  const confirmTyped = confirmPassword.length > 0;
+  const showConfirmError = (
+    submitted
+    || touched.confirm
+    || (confirmTyped && confirmPassword.length >= password.length)
+  ) ? confirmError : '';
+  const confirmSuccess = confirmTyped && password === confirmPassword ? 'Passwords match' : '';
+
+  const markTouched = (field) => setTouched((t) => (t[field] ? t : { ...t, [field]: true }));
+  const clearFormError = () => { if (formError) setFormError(''); };
 
   const handleGuestLogin = () => {
     signInAsGuest();
@@ -75,68 +111,61 @@ export default function SignUpScreen({ navigation }) {
   };
 
   const handleSignUp = async () => {
+    if (submittingRef.current) return;
+    setSubmitted(true);
+    setFormError('');
     if (!isConfigured) {
-      showToast('Supabase not configured. Add your credentials to app.json extra.', 'error');
+      setFormError('Supabase not configured. Add your credentials to app.json extra.');
       return;
     }
+    if (identifierError) {
+      identifierRef.current?.focus();
+      return;
+    }
+    if (passwordError) {
+      passwordRef.current?.focus();
+      return;
+    }
+    if (confirmError) {
+      confirmRef.current?.focus();
+      return;
+    }
+
     const trimmed = identifier.trim();
-    if (!trimmed) {
-      showToast('Please enter your email or phone number.', 'error');
-      return;
-    }
-
+    submittingRef.current = true;
     setLoading(true);
-
-    if (isPhone) {
-      // Phone sign-up: send OTP via SMS
-      const phone = trimmed.startsWith('+') ? trimmed : `+${trimmed}`;
-      const { error } = await signInWithPhone(phone);
+    Keyboard.dismiss();
+    try {
+      if (isPhone) {
+        // Phone sign-up: send OTP via SMS
+        const phone = trimmed.startsWith('+') ? trimmed : `+${trimmed}`;
+        const { error } = await signInWithPhone(phone);
+        if (error) {
+          setFormError(getAuthErrorMessage(error, 'Could not send the verification code. Please try again.'));
+          return;
+        }
+        navigation.navigate('VerifyOTP', { phone, type: 'signup' });
+      } else {
+        // Email sign-up: create account, then navigate to OTP verification
+        const { error } = await signUp({ email: trimmed, password, name: name.trim() });
+        if (error) {
+          setFormError(getAuthErrorMessage(error, 'Sign-up failed. Please try again.'));
+          return;
+        }
+        showToast('Verification code sent to your email.', 'success');
+        navigation.navigate('VerifyOTP', { email: trimmed, type: 'signup' });
+      }
+    } catch (e) {
+      setFormError(getAuthErrorMessage(e, 'Sign-up failed. Please try again.'));
+    } finally {
+      submittingRef.current = false;
       setLoading(false);
-      if (error) {
-        showToast(error.message || 'Could not send verification code.', 'error');
-        return;
-      }
-      navigation.navigate('VerifyOTP', { phone, type: 'signup' });
-    } else {
-      // Email sign-up: create account, then navigate to OTP verification
-      if (!password || !confirmPassword) {
-        setLoading(false);
-        showToast('Fill in all required fields.', 'error');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setLoading(false);
-        showToast('Passwords do not match.', 'error');
-        return;
-      }
-      if (password.length < 6) {
-        setLoading(false);
-        showToast('Password must be at least 6 characters.', 'error');
-        return;
-      }
-      const { data, error } = await signUp({ email: trimmed, password, name });
-      setLoading(false);
-      if (error) {
-        showToast(error.message || 'Sign-up failed.', 'error');
-        return;
-      }
-      // Navigate to OTP verification screen
-      showToast('Verification code sent to your email.', 'success');
-      navigation.navigate('VerifyOTP', { email: trimmed, type: 'signup' });
     }
   };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
+      <FormScrollView contentContainerStyle={styles.scrollContent}>
           <AnimatedScreen>
             <View style={styles.brandingContainer}>
               <Logo size="welcome" />
@@ -148,41 +177,79 @@ export default function SignUpScreen({ navigation }) {
             </View>
 
             <View style={styles.formCard}>
+              <FormMessage message={formError} />
+
               <Input
+                label="Full name"
                 value={name}
-                onChangeText={setName}
-                placeholder="Full Name"
+                onChangeText={(text) => { setName(text); clearFormError(); }}
+                placeholder="e.g., Jane Banda"
+                autoCapitalize="words"
+                autoComplete="name"
+                textContentType="name"
+                returnKeyType="next"
+                submitBehavior="submit"
+                onSubmitEditing={() => identifierRef.current?.focus()}
                 iconName="person-outline"
+                editable={!loading}
                 style={styles.input}
               />
 
               <Input
+                ref={identifierRef}
+                label="Email or phone number"
                 value={identifier}
-                onChangeText={setIdentifier}
-                placeholder="Email or Phone Number"
-                keyboardType="default"
-                autoCapitalize="none"
+                onChangeText={(text) => { setIdentifier(text); clearFormError(); }}
+                onBlur={() => markTouched('identifier')}
+                placeholder="you@example.com or +260 97 123 4567"
+                keyboardType="email-address"
+                returnKeyType={isPhone ? 'send' : 'next'}
+                submitBehavior={isPhone ? 'blurAndSubmit' : 'submit'}
+                onSubmitEditing={() => (isPhone ? handleSignUp() : passwordRef.current?.focus())}
                 iconName={isPhone ? 'call-outline' : 'mail-outline'}
+                error={showIdentifierError}
+                editable={!loading}
                 style={styles.input}
               />
 
               {!isPhone && (
                 <>
                   <Input
+                    ref={passwordRef}
+                    label="Password"
                     value={password}
-                    onChangeText={setPassword}
-                    placeholder="Password"
+                    onChangeText={(text) => { setPassword(text); clearFormError(); }}
+                    onBlur={() => markTouched('password')}
+                    placeholder="Create a password"
                     secureTextEntry
+                    autoComplete="new-password"
+                    textContentType="newPassword"
+                    returnKeyType="next"
+                    submitBehavior="submit"
+                    onSubmitEditing={() => confirmRef.current?.focus()}
                     iconName="lock-closed-outline"
+                    error={showPasswordError}
+                    editable={!loading}
+                    focusAccessory={<PasswordRequirements password={password} />}
                     style={styles.input}
                   />
 
                   <Input
+                    ref={confirmRef}
+                    label="Confirm password"
                     value={confirmPassword}
-                    onChangeText={setConfirmPassword}
-                    placeholder="Confirm Password"
+                    onChangeText={(text) => { setConfirmPassword(text); clearFormError(); }}
+                    onBlur={() => markTouched('confirm')}
+                    placeholder="Re-enter your password"
                     secureTextEntry
+                    autoComplete="new-password"
+                    textContentType="newPassword"
+                    returnKeyType="done"
+                    onSubmitEditing={handleSignUp}
                     iconName="lock-closed-outline"
+                    error={showConfirmError}
+                    success={confirmSuccess}
+                    editable={!loading}
                     style={styles.input}
                   />
                 </>
@@ -197,6 +264,8 @@ export default function SignUpScreen({ navigation }) {
                 onPress={handleSignUp}
                 activeOpacity={0.8}
                 disabled={loading}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: loading, busy: loading }}
               >
                 {loading ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -272,8 +341,7 @@ export default function SignUpScreen({ navigation }) {
               <Text style={styles.guestHint}>Limited to 3 tests</Text>
             </View>
           </AnimatedScreen>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </FormScrollView>
     </SafeAreaView>
   );
 }

@@ -1,7 +1,13 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Alert, TextInput, ActivityIndicator, TouchableOpacity, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, Alert, ActivityIndicator, TouchableOpacity, Modal, Keyboard } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AnimatedScreen from '../components/AnimatedScreen';
+import Input from '../components/Input';
+import FormScrollView from '../components/FormScrollView';
+import FormMessage from '../components/FormMessage';
+import PasswordRequirements from '../components/PasswordRequirements';
+import { validatePassword, validatePasswordConfirmation } from '../utils/security';
+import { getAuthErrorMessage } from '../utils/authErrors';
 import { ProfileHeaderSkeleton, ProfileAccountSkeleton } from './skeletons/ProfileSkeleton';
 import { useColors, useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -25,6 +31,22 @@ export default function ProfileScreen({ navigation }) {
   const [showPasswordModal, setShowPasswordModal] = React.useState(false);
   const [newPassword, setNewPassword] = React.useState('');
   const [confirmPassword, setConfirmPassword] = React.useState('');
+  const [passwordTouched, setPasswordTouched] = React.useState({});
+  const [passwordSubmitted, setPasswordSubmitted] = React.useState(false);
+  const [passwordFormError, setPasswordFormError] = React.useState('');
+  const passwordSubmittingRef = React.useRef(false);
+  const newPasswordRef = React.useRef(null);
+  const confirmPasswordRef = React.useRef(null);
+
+  const newPasswordCheck = validatePassword(newPassword);
+  const confirmPasswordCheck = validatePasswordConfirmation(newPassword, confirmPassword);
+  const confirmTyped = confirmPassword.length > 0;
+  const showNewPasswordError = (passwordTouched.password || passwordSubmitted) && !newPasswordCheck.valid
+    ? newPasswordCheck.message : '';
+  const showConfirmPasswordError = (
+    passwordSubmitted || passwordTouched.confirm || (confirmTyped && confirmPassword.length >= newPassword.length)
+  ) && !confirmPasswordCheck.valid ? confirmPasswordCheck.message : '';
+  const confirmPasswordSuccess = confirmTyped && newPassword === confirmPassword ? 'Passwords match' : '';
 
   const displayName = React.useMemo(() => {
     const name = user?.user_metadata?.full_name || '';
@@ -122,25 +144,45 @@ export default function ProfileScreen({ navigation }) {
   };
 
 
+  const closePasswordModal = () => {
+    if (passwordSubmittingRef.current) return;
+    setShowPasswordModal(false);
+    setNewPassword('');
+    setConfirmPassword('');
+    setPasswordTouched({});
+    setPasswordSubmitted(false);
+    setPasswordFormError('');
+  };
+
   const handleChangePassword = async () => {
-    if (newPassword.length < 6) {
-      Alert.alert('Too short', 'Password must be at least 6 characters.');
+    if (passwordSubmittingRef.current) return;
+    setPasswordSubmitted(true);
+    setPasswordFormError('');
+    if (!newPasswordCheck.valid) {
+      newPasswordRef.current?.focus();
       return;
     }
-    if (newPassword !== confirmPassword) {
-      Alert.alert('Mismatch', 'Passwords do not match.');
+    if (!confirmPasswordCheck.valid) {
+      confirmPasswordRef.current?.focus();
       return;
     }
+    passwordSubmittingRef.current = true;
     setSaving(true);
-    const { error } = await changePassword(newPassword);
-    setSaving(false);
-    if (error) {
-      Alert.alert('Error', error.message || 'Could not change password.');
-    } else {
+    Keyboard.dismiss();
+    try {
+      const { error } = await changePassword(newPassword);
+      if (error) {
+        setPasswordFormError(getAuthErrorMessage(error, 'Could not change your password. Please try again.'));
+        return;
+      }
+      passwordSubmittingRef.current = false;
+      closePasswordModal();
       Alert.alert('Success', 'Password updated successfully.');
-      setShowPasswordModal(false);
-      setNewPassword('');
-      setConfirmPassword('');
+    } catch (e) {
+      setPasswordFormError(getAuthErrorMessage(e, 'Could not change your password. Please try again.'));
+    } finally {
+      passwordSubmittingRef.current = false;
+      setSaving(false);
     }
   };
 
@@ -230,32 +272,53 @@ export default function ProfileScreen({ navigation }) {
   return (
     <View style={styles.container}>
       {/* Change Password Modal */}
-      <Modal visible={showPasswordModal} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
+      <Modal visible={showPasswordModal} transparent animationType="fade" onRequestClose={closePasswordModal}>
+        <FormScrollView style={styles.modalScrim} contentContainerStyle={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Change Password</Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="New password"
-              placeholderTextColor={colors.textLight}
-              secureTextEntry
+            <Text style={styles.modalTitle} accessibilityRole="header">Change Password</Text>
+            <FormMessage message={passwordFormError} />
+            <Input
+              ref={newPasswordRef}
+              label="New password"
+              placeholder="Enter new password"
               value={newPassword}
-              onChangeText={setNewPassword}
-              autoCapitalize="none"
-            />
-            <TextInput
-              style={styles.modalInput}
-              placeholder="Confirm new password"
-              placeholderTextColor={colors.textLight}
+              onChangeText={(text) => { setNewPassword(text); if (passwordFormError) setPasswordFormError(''); }}
+              onBlur={() => setPasswordTouched((t) => ({ ...t, password: true }))}
               secureTextEntry
+              autoComplete="new-password"
+              textContentType="newPassword"
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => confirmPasswordRef.current?.focus()}
+              error={showNewPasswordError}
+              editable={!saving}
+              focusAccessory={<PasswordRequirements password={newPassword} />}
+              style={styles.modalField}
+              autoFocus
+            />
+            <Input
+              ref={confirmPasswordRef}
+              label="Confirm new password"
+              placeholder="Re-enter new password"
               value={confirmPassword}
-              onChangeText={setConfirmPassword}
-              autoCapitalize="none"
+              onChangeText={(text) => { setConfirmPassword(text); if (passwordFormError) setPasswordFormError(''); }}
+              onBlur={() => setPasswordTouched((t) => ({ ...t, confirm: true }))}
+              secureTextEntry
+              autoComplete="new-password"
+              textContentType="newPassword"
+              returnKeyType="done"
+              onSubmitEditing={handleChangePassword}
+              error={showConfirmPasswordError}
+              success={confirmPasswordSuccess}
+              editable={!saving}
+              style={styles.modalField}
             />
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={styles.modalCancelBtn}
-                onPress={() => { setShowPasswordModal(false); setNewPassword(''); setConfirmPassword(''); }}
+                onPress={closePasswordModal}
+                disabled={saving}
+                accessibilityRole="button"
               >
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </TouchableOpacity>
@@ -263,16 +326,21 @@ export default function ProfileScreen({ navigation }) {
                 style={[styles.modalSaveBtn, saving && { opacity: 0.6 }]}
                 onPress={handleChangePassword}
                 disabled={saving}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: saving, busy: saving }}
               >
                 {saving ? (
-                  <ActivityIndicator size="small" color="#fff" />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={styles.modalSaveText}>Updating...</Text>
+                  </View>
                 ) : (
                   <Text style={styles.modalSaveText}>Update</Text>
                 )}
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </FormScrollView>
       </Modal>
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
@@ -581,9 +649,12 @@ const makeStyles = (colors) => StyleSheet.create({
     fontWeight: '500',
   },
   // ── Modal ──
-  modalOverlay: {
+  modalScrim: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  modalOverlay: {
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
@@ -602,15 +673,7 @@ const makeStyles = (colors) => StyleSheet.create({
     marginBottom: 16,
     textAlign: 'center',
   },
-  modalInput: {
-    fontSize: 15,
-    color: colors.text,
-    backgroundColor: colors.surfaceLight,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+  modalField: {
     marginBottom: 12,
   },
   modalActions: {
@@ -620,6 +683,8 @@ const makeStyles = (colors) => StyleSheet.create({
     gap: 12,
   },
   modalCancelBtn: {
+    minHeight: 44,
+    justifyContent: 'center',
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 8,
@@ -632,6 +697,8 @@ const makeStyles = (colors) => StyleSheet.create({
     fontWeight: '600',
   },
   modalSaveBtn: {
+    minHeight: 44,
+    justifyContent: 'center',
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 10,
