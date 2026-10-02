@@ -4,6 +4,12 @@
     "slug": "gradesmart",
     "scheme": "gradesmart",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/3002c97d-a06e-487b-85fc-81639b068238"
+    },
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
