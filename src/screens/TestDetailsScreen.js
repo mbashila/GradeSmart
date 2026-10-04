@@ -8,6 +8,7 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import AnimatedScreen from '../components/AnimatedScreen';
 import ErrorState from '../components/ErrorState';
+import { getActionErrorMessage, logError } from '../utils/errors';
 import { SkeletonText } from '../components/skeletons';
 import { StudentResultsSkeleton, TestAnalyticsSkeleton } from './skeletons/TestDetailsSkeleton';
 import { useColors } from '../context/ThemeContext';
@@ -277,7 +278,8 @@ export default function TestDetailsScreen({ navigation, route }) {
         Alert.alert('Exported', 'PDF generated successfully.');
       }
     } catch (e) {
-      Alert.alert('Export Failed', e.message || 'Could not export results.');
+      logError('EXPORT', e, { operation: 'export pdf' });
+      Alert.alert('Export failed', getActionErrorMessage(e, "Couldn't export the results."));
     } finally {
       setExporting(false);
     }
@@ -389,6 +391,7 @@ export default function TestDetailsScreen({ navigation, route }) {
                 <StudentResultsSkeleton styles={styles} />
               ) : loadError ? (
                 <ErrorState
+                  error={scansError}
                   title="Unable to load student results"
                   onRetry={refreshScans}
                   retrying={scansSyncing}

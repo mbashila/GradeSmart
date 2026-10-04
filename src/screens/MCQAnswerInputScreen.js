@@ -12,6 +12,7 @@ import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { gradeMCQ } from '../utils/grading';
 import { detectAnswersWithAI, getOpenAIKey } from '../utils/openaiService';
+import { getAiErrorMessage } from '../utils/errors';
 
 export default function MCQAnswerInputScreen({ navigation, route }) {
   const studentNumberRef = useRef(null);
@@ -82,7 +83,7 @@ export default function MCQAnswerInputScreen({ navigation, route }) {
     try {
       const result = await detectAnswersWithAI(imageUri, questionCount, markingKey, mcqOptions);
       if (result.error) {
-        setScanMessage(`Detection failed: ${result.error}. Correct answers below.`);
+        setScanMessage(`Couldn't read the answer sheet. ${getAiErrorMessage(result.error)} Enter the answers below.`);
       } else {
         const newAnswers = result.answers.map((a) => (a === '?' ? '' : a));
         const newConf = result.confidence || Array.from({ length: questionCount }, () => 0);

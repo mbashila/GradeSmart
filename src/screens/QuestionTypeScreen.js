@@ -12,6 +12,7 @@ import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import Input from '../components/Input';
 import { extractQuestionsFromPaperImage, getOpenAIKey } from '../utils/openaiService';
+import { getAiErrorMessage } from '../utils/errors';
 import { useAuth } from '../context/AuthContext';
 
 const ALL_SECTION_TYPES = [
@@ -152,7 +153,7 @@ export default function QuestionTypeScreen({ navigation, route }) {
       });
 
       if (result.error) {
-        updateSection(sIdx, { extracting: false, extractionDone: true, extractionMsg: `Failed: ${result.error}` });
+        updateSection(sIdx, { extracting: false, extractionDone: true, extractionMsg: `Couldn't extract questions. ${getAiErrorMessage(result.error)}` });
         showToast(`Section ${section.label}: Could not extract questions`, 'error');
       } else {
         updateSection(sIdx, {

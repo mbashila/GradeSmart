@@ -1,6 +1,7 @@
 import React from 'react';
 import { transcribeHandwritingWithVision, gradeEssayTextWithOpenAI, gradeDiagramWithVision, gradeSectionAnswersWithVision } from '../utils/openaiService';
 import { splitTranscriptionByQuestions } from '../utils/questionUtils';
+import { getAiErrorMessage } from '../utils/errors';
 import { useNotifications } from '../context/NotificationsContext';
 
 export default function useEssayGradingPipeline(params) {
@@ -161,7 +162,7 @@ export default function useEssayGradingPipeline(params) {
 
       if (!anyAnswer) {
         visionResultsRef.current = null;
-        markDone(anyError ? `Could not read answers: ${anyError}. Score manually.` : 'Could not read any answers. Score manually.');
+        markDone(anyError ? `Couldn't read the answers. ${getAiErrorMessage(anyError)} Score manually.` : "Couldn't read any answers. Score manually.");
         return;
       }
 

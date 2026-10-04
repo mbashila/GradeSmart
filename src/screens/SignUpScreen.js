@@ -73,7 +73,7 @@ export default function SignUpScreen({ navigation }) {
 
   const handleSocialLogin = async (provider) => {
     if (!isConfigured) {
-      showToast('Supabase not configured.', 'error');
+      showToast("Sign-up isn't available right now.", 'error');
       return;
     }
     setSocialLoading(provider);
@@ -87,7 +87,7 @@ export default function SignUpScreen({ navigation }) {
         },
       });
       if (error) {
-        showToast(error.message || `${provider} sign-up failed`, 'error');
+        showToast(getAuthErrorMessage(error, `Couldn't sign up with ${provider}. Please try again.`), 'error');
         return;
       }
       if (data?.url) {
@@ -115,7 +115,7 @@ export default function SignUpScreen({ navigation }) {
     setSubmitted(true);
     setFormError('');
     if (!isConfigured) {
-      setFormError('Supabase not configured. Add your credentials to app.json extra.');
+      setFormError("Sign-up isn't available right now. Please try again later.");
       return;
     }
     if (identifierError) {

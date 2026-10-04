@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import storage from '../utils/storage';
 import { makeRedirectUri } from 'expo-auth-session';
@@ -9,6 +9,9 @@ const AuthContext = createContext({
   loading: true,
   isConfigured: false,
   isGuest: false,
+  sessionExpired: false,
+  expireSession: () => {},
+  clearSessionExpired: () => {},
   signIn: async () => ({ data: null, error: null }),
   signUp: async () => ({ data: null, error: null }),
   signInWithPhone: async () => ({ data: null, error: null }),
@@ -29,6 +32,11 @@ export function AuthProvider({ children }) {
   const [error, setError] = useState(null);
   const [isGuest, setIsGuest] = useState(false);
   const [userRole, setUserRole] = useState('user');
+  const [sessionExpired, setSessionExpired] = useState(false);
+  // Distinguishes a user-initiated sign-out from Supabase dropping the session
+  // (e.g. a refresh token that can no longer be used).
+  const intentionalSignOutRef = useRef(false);
+  const hadSessionRef = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -73,6 +81,7 @@ export function AuthProvider({ children }) {
         const restored = data?.session ?? null;
         setSession(restored);
         setUser(restored?.user ?? null);
+        hadSessionRef.current = !!restored?.user;
         setError(null);
         console.log(restored ? '[AUTH] Session found' : '[AUTH] No session found');
         if (restored?.user?.id) await fetchRole(restored.user.id, 'restore');
@@ -90,6 +99,12 @@ export function AuthProvider({ children }) {
     // every later request (the query itself needs that lock for its token).
     const { data: sub } = supabase.auth.onAuthStateChange((event, sess) => {
       console.log('[AUTH] Auth state changed:', event, sess?.user ? 'with session' : 'no session');
+      if (event === 'SIGNED_OUT' && hadSessionRef.current && !intentionalSignOutRef.current) {
+        setSessionExpired(true);
+      }
+      if (event === 'SIGNED_IN') setSessionExpired(false);
+      hadSessionRef.current = !!sess?.user;
+      intentionalSignOutRef.current = false;
       setSession(sess);
       setUser(sess?.user ?? null);
       if (sess?.user?.id) {
@@ -147,9 +162,27 @@ export function AuthProvider({ children }) {
       setSession(null);
       return { error: null };
     }
+    intentionalSignOutRef.current = true;
+    setSessionExpired(false);
     const { error } = await supabase.auth.signOut();
+    if (error) intentionalSignOutRef.current = false;
     return { error };
   }, [isGuest]);
+
+  // Called when a request reports an expired/invalid session: drops the local
+  // session so navigation returns to Login, which shows the expiry notice.
+  const expireSession = useCallback(async () => {
+    console.log('[AUTH] Session expired, signing out locally');
+    setSessionExpired(true);
+    intentionalSignOutRef.current = false;
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
+    if (error) {
+      setSession(null);
+      setUser(null);
+    }
+  }, []);
+
+  const clearSessionExpired = useCallback(() => setSessionExpired(false), []);
 
   const updateProfile = useCallback(async ({ fullName, school, phone, location, bio }) => {
     const updates = {};
@@ -207,6 +240,7 @@ export function AuthProvider({ children }) {
       const { error: rpcError } = await supabase.rpc('delete_user');
       if (rpcError) {
         // Fallback: sign out (account stays but data is wiped)
+        intentionalSignOutRef.current = true;
         await supabase.auth.signOut();
         return { error: null, partial: true };
       }
@@ -230,6 +264,9 @@ export function AuthProvider({ children }) {
     isGuest,
     isAdmin,
     userRole,
+    sessionExpired,
+    expireSession,
+    clearSessionExpired,
     signIn,
     signUp,
     signInWithPhone,
@@ -239,7 +276,7 @@ export function AuthProvider({ children }) {
     changePassword,
     resetPassword,
     deleteAccount,
-  }), [user, session, loading, error, isGuest, isAdmin, userRole, signIn, signUp, signInWithPhone, signInAsGuest, signOut, updateProfile, changePassword, resetPassword, deleteAccount]);
+  }), [user, session, loading, error, isGuest, isAdmin, userRole, sessionExpired, expireSession, clearSessionExpired, signIn, signUp, signInWithPhone, signInAsGuest, signOut, updateProfile, changePassword, resetPassword, deleteAccount]);
 
   return (
     <AuthContext.Provider value={value}>

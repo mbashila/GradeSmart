@@ -90,6 +90,7 @@ export default function AdminDashboardScreen({ navigation }) {
           ) : !stats && status.stats.error ? (
             <ErrorState
               style={{ marginHorizontal: 16, marginTop: 12 }}
+              error={status.stats.error}
               title="Unable to load admin stats"
               onRetry={fetchStats}
               retrying={status.stats.loading}
@@ -161,6 +162,7 @@ export default function AdminDashboardScreen({ navigation }) {
             ) : status.activeUsers.error && activeUsers.length === 0 ? (
               <ErrorState
                 compact
+                error={status.activeUsers.error}
                 message="Couldn't load activity data."
                 onRetry={() => fetchActiveUsers(period)}
                 retrying={status.activeUsers.loading}
@@ -209,6 +211,7 @@ export default function AdminDashboardScreen({ navigation }) {
             ) : status.queries.error && queries.length === 0 ? (
               <ErrorState
                 compact
+                error={status.queries.error}
                 message="Couldn't load support queries."
                 onRetry={() => fetchQueries('all')}
                 retrying={status.queries.loading}

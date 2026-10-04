@@ -8,6 +8,7 @@ import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useAdmin } from '../context/AdminContext';
 import { useAuth } from '../context/AuthContext';
+import { getActionErrorMessage } from '../utils/errors';
 
 export default function AdminUserDetailScreen({ navigation, route }) {
   const colors = useColors();
@@ -50,7 +51,7 @@ export default function AdminUserDetailScreen({ navigation, route }) {
             const { error } = await updateUserRole(userId, newRole);
             setUpdatingRole(false);
             if (error) {
-              Alert.alert('Error', error.message || 'Failed to update role.');
+              Alert.alert("Couldn't update role", getActionErrorMessage(error));
             } else {
               Alert.alert('Done', `Role updated to "${newRole}".`);
             }
@@ -83,7 +84,7 @@ export default function AdminUserDetailScreen({ navigation, route }) {
             );
             setTogglingBan(false);
             if (error) {
-              Alert.alert('Error', error.message || `Failed to ${action.toLowerCase()} user.`);
+              Alert.alert(`Couldn't ${action.toLowerCase()} user`, getActionErrorMessage(error));
             }
           },
         },

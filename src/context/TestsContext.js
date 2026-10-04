@@ -1,13 +1,14 @@
-import React, { createContext, useContext, useMemo, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import storage from '../utils/storage';
 import { supabase, isSupabaseConfigured, withRequestTimeout } from '../lib/supabase';
 import { useAuth } from './AuthContext';
+import { logError } from '../utils/errors';
 
 const TestsContext = createContext({
   tests: [],
-  addTest: () => {},
-  updateTest: () => {},
-  deleteTest: () => {},
+  addTest: async () => ({ error: null }),
+  updateTest: async () => ({ error: null }),
+  deleteTest: async () => ({ error: null }),
   syncing: false,
   syncError: null,
   hydrated: false,
@@ -36,6 +37,8 @@ export function TestsProvider({ children }) {
   const [hydrated, setHydrated] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);
+  const testsRef = useRef(tests);
+  testsRef.current = tests;
   const { user, isGuest } = useAuth();
 
   const STORAGE_KEY = isGuest ? '@gradesmart:tests:guest' : '@gradesmart:tests';
@@ -59,7 +62,7 @@ export function TestsProvider({ children }) {
         setTests(data.map(mapTestRow));
       }
     } catch (e) {
-      console.log('[DASHBOARD] Tests request failed:', e?.message || e);
+      logError('TESTS', e, { operation: 'fetch tests' });
       if (isCurrent()) setSyncError(e);
     } finally {
       if (isCurrent()) setSyncing(false);
@@ -114,11 +117,12 @@ export function TestsProvider({ children }) {
       return [...prev, normalized];
     });
 
-    // Sync to Supabase (not for guests)
+    // Sync to Supabase (not for guests). The local copy is kept either way;
+    // callers get `{ error }` so they can tell the user it didn't sync.
     if (!isGuest && isSupabaseConfigured && user?.id) {
       try {
         const { questionType, numberOfQuestions, totalPoints, markingKey, mcqCount, ...rest } = normalized;
-        await supabase.from('tests').upsert({
+        const { error } = await withRequestTimeout((signal) => supabase.from('tests').upsert({
           id,
           user_id: user.id,
           title: normalized.title || '',
@@ -132,9 +136,14 @@ export function TestsProvider({ children }) {
           data: rest,
           created_at: createdAt,
           updated_at: new Date().toISOString(),
-        }, { onConflict: 'id' });
-      } catch {}
+        }, { onConflict: 'id' }).abortSignal(signal));
+        if (error) throw error;
+      } catch (e) {
+        logError('TESTS', e, { operation: 'save test' });
+        return { error: e };
+      }
     }
+    return { error: null };
   }, [user, isGuest]);
 
   const updateTest = useCallback(async (id, patch) => {
@@ -151,19 +160,42 @@ export function TestsProvider({ children }) {
         if (patch.totalPoints !== undefined) updates.total_points = parseInt(patch.totalPoints, 10) || 0;
         if (patch.markingKey !== undefined) updates.marking_key = patch.markingKey;
         if (patch.mcqCount !== undefined) updates.mcq_count = parseInt(patch.mcqCount, 10) || 0;
-        await supabase.from('tests').update(updates).eq('id', id).eq('user_id', user.id);
-      } catch {}
+        const { error } = await withRequestTimeout((signal) => supabase
+          .from('tests').update(updates).eq('id', id).eq('user_id', user.id).abortSignal(signal));
+        if (error) throw error;
+      } catch (e) {
+        logError('TESTS', e, { operation: 'update test' });
+        return { error: e };
+      }
     }
+    return { error: null };
   }, [user, isGuest]);
 
   const deleteTest = useCallback(async (id) => {
+    const removedIndex = testsRef.current.findIndex((t) => t.id === id);
+    const removed = removedIndex === -1 ? null : testsRef.current[removedIndex];
     setTests((prev) => prev.filter((t) => t.id !== id));
 
     if (!isGuest && isSupabaseConfigured && user?.id) {
       try {
-        await supabase.from('tests').delete().eq('id', id).eq('user_id', user.id);
-      } catch {}
+        const { error } = await withRequestTimeout((signal) => supabase
+          .from('tests').delete().eq('id', id).eq('user_id', user.id).abortSignal(signal));
+        if (error) throw error;
+      } catch (e) {
+        logError('TESTS', e, { operation: 'delete test' });
+        // Put the test back so the list matches the server.
+        if (removed) {
+          setTests((prev) => {
+            if (prev.some((t) => t.id === id)) return prev;
+            const next = prev.slice();
+            next.splice(Math.min(removedIndex, next.length), 0, removed);
+            return next;
+          });
+        }
+        return { error: e };
+      }
     }
+    return { error: null };
   }, [user, isGuest]);
 
   const value = useMemo(() => ({ tests, addTest, updateTest, deleteTest, syncing, syncError, hydrated, refresh }), [tests, addTest, updateTest, deleteTest, syncing, syncError, hydrated, refresh]);

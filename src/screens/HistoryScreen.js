@@ -36,6 +36,10 @@ export default function HistoryScreen({ navigation }) {
     () => Promise.all([refreshTests(), refreshScans()]),
     [refreshTests, refreshScans]
   );
+  const retryFailed = useCallback(
+    () => Promise.all([testsError && refreshTests(), scansError && refreshScans()]),
+    [testsError, scansError, refreshTests, refreshScans]
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -238,8 +242,9 @@ export default function HistoryScreen({ navigation }) {
             {!!syncError && tests.length > 0 && (
               <ErrorState
                 compact
+                error={syncError}
                 message="Couldn't sync with the server. Showing saved data."
-                onRetry={retrySync}
+                onRetry={retryFailed}
                 retrying={syncing}
                 style={{ marginTop: 0, marginBottom: 12 }}
               />
@@ -249,8 +254,9 @@ export default function HistoryScreen({ navigation }) {
               <HistoryTestsSkeleton styles={styles} />
             ) : syncError && tests.length === 0 ? (
               <ErrorState
+                error={syncError}
                 title="Unable to load your tests"
-                onRetry={retrySync}
+                onRetry={retryFailed}
                 retrying={syncing}
               />
             ) : enrichedTests.length === 0 ? (

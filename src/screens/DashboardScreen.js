@@ -6,6 +6,8 @@ import Card from '../components/Card';
 import AnimatedScreen from '../components/AnimatedScreen';
 import PressableScale from '../components/PressableScale';
 import ErrorState from '../components/ErrorState';
+import { useToast } from '../components/Toast';
+import { getActionErrorMessage } from '../utils/errors';
 import { DashboardStatsSkeleton, DashboardRecentScansSkeleton } from './skeletons/DashboardSkeleton';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
@@ -27,6 +29,7 @@ export default function DashboardScreen({ navigation }) {
   const { tests, deleteTest, syncing: testsSyncing, syncError: testsError, hydrated: testsHydrated, refresh: refreshTests } = useTests();
   const { user, isGuest, signOut } = useAuth();
   const { isLiked, toggleLike } = useLikes();
+  const { showToast } = useToast();
 
   // Single-device session enforcement
   useDeviceSession(
@@ -45,6 +48,11 @@ export default function DashboardScreen({ navigation }) {
   const retrySync = useCallback(
     () => Promise.all([refreshTests(), refreshScans()]),
     [refreshTests, refreshScans]
+  );
+  // Retry buttons repeat only the request(s) that failed.
+  const retryFailed = useCallback(
+    () => Promise.all([testsError && refreshTests(), scansError && refreshScans()]),
+    [testsError, scansError, refreshTests, refreshScans]
   );
 
   const onRefresh = useCallback(async () => {
@@ -239,9 +247,9 @@ export default function DashboardScreen({ navigation }) {
                   <DashboardStatsSkeleton styles={styles} />
                 ) : syncError && !hasData ? (
                   <ErrorState
+                    error={syncError}
                     title="Unable to load your dashboard"
-                    message="We couldn't reach the server. Check your connection and try again."
-                    onRetry={retrySync}
+                    onRetry={retryFailed}
                     retrying={syncing}
                   />
                 ) : (
@@ -272,8 +280,9 @@ export default function DashboardScreen({ navigation }) {
                 {!!syncError && hasData && (
                   <ErrorState
                     compact
+                    error={syncError}
                     message="Couldn't sync with the server. Showing saved data."
-                    onRetry={retrySync}
+                    onRetry={retryFailed}
                     retrying={syncing}
                   />
                 )}
@@ -344,7 +353,10 @@ export default function DashboardScreen({ navigation }) {
                         {
                           text: 'Delete',
                           style: 'destructive',
-                          onPress: () => deleteTest(t.id),
+                          onPress: async () => {
+                            const { error } = await deleteTest(t.id);
+                            if (error) showToast(getActionErrorMessage(error, "Couldn't delete this test."), 'error');
+                          },
                         },
                       ]
                     );
@@ -379,9 +391,10 @@ export default function DashboardScreen({ navigation }) {
             ) : scansError && scans.length === 0 ? (
               <ErrorState
                 compact
+                error={scansError}
                 message="Couldn't load your recent scans."
-                onRetry={retrySync}
-                retrying={syncing}
+                onRetry={refreshScans}
+                retrying={scansSyncing}
               />
             ) : recentScansList.length === 0 ? (
               <Card style={[styles.testCard, { alignItems: 'center' }] }>

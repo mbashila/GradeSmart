@@ -3,6 +3,7 @@ import 'react-native-get-random-values';
 import { createClient } from '@supabase/supabase-js';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
+import { reportNetworkFailure, reportNetworkSuccess } from '../utils/networkStatus';
 
 // Chunked SecureStore adapter — splits values that exceed the 2048-byte limit
 // into multiple keys so the full Supabase session can be persisted safely.
@@ -63,18 +64,78 @@ export const isSupabaseConfigured = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 export const REQUEST_TIMEOUT_MS = 15000;
 
+function timeoutError(ms) {
+  const err = new Error(`Request timed out after ${ms}ms`);
+  err.name = 'TimeoutError';
+  err.code = 'timeout';
+  return err;
+}
+
 // Runs a Supabase request with an abort signal so a stalled network call
 // settles as an error instead of leaving callers loading forever.
 export async function withRequestTimeout(run, ms = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   try {
-    return await run(controller.signal);
+    const result = await run(controller.signal);
+    // postgrest-js resolves aborted requests as `{ error }` instead of throwing.
+    if (controller.signal.aborted) throw timeoutError(ms);
+    return result;
   } catch (e) {
-    if (controller.signal.aborted) throw new Error(`Request timed out after ${ms}ms`);
+    if (controller.signal.aborted) throw timeoutError(ms);
     throw e;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// Dev-only fault injection for exercising error UI against database requests:
+// EXPO_PUBLIC_SIMULATE_API_ERROR = 400 | 401 | 403 | 404 | 429 | 500 | offline | timeout
+const SIMULATED_API_ERROR = __DEV__ ? (process.env.EXPO_PUBLIC_SIMULATE_API_ERROR || '') : '';
+
+function simulatedResponse(url, init) {
+  if (!SIMULATED_API_ERROR || !/\/rest\/v1\//.test(String(url))) return null;
+  if (SIMULATED_API_ERROR === 'offline') return Promise.reject(new TypeError('Network request failed'));
+  if (SIMULATED_API_ERROR === 'timeout') {
+    return new Promise((_, reject) => {
+      init?.signal?.addEventListener?.('abort', () => {
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        reject(err);
+      });
+    });
+  }
+  const status = Number(SIMULATED_API_ERROR) || 500;
+  return Promise.resolve(new Response(
+    JSON.stringify({ message: `Simulated ${status}`, code: status === 401 ? 'PGRST301' : 'SIMULATED' }),
+    { status, headers: { 'Content-Type': 'application/json' } }
+  ));
+}
+
+// Reports reachability to the offline indicator for every Supabase request.
+async function trackedFetch(url, init) {
+  try {
+    const res = await (simulatedResponse(url, init) || fetch(url, init));
+    reportNetworkSuccess();
+    return res;
+  } catch (e) {
+    if (e?.name !== 'AbortError') reportNetworkFailure();
+    throw e;
+  }
+}
+
+// Lightweight reachability probe used by the offline indicator; a response of
+// any status means the device is back online.
+export async function checkConnectivity(ms = 5000) {
+  if (!isSupabaseConfigured) return true;
+  try {
+    await withRequestTimeout((signal) => trackedFetch(`${SUPABASE_URL}/auth/v1/health`, {
+      headers: { apikey: SUPABASE_ANON_KEY },
+      signal,
+    }), ms);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -88,5 +149,6 @@ export const supabase = createClient(
       persistSession: true,
       detectSessionInUrl: false,
     },
+    global: { fetch: trackedFetch },
   }
 );

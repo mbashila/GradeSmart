@@ -1,15 +1,16 @@
-import React, { createContext, useContext, useMemo, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import storage from '../utils/storage';
 import { supabase, isSupabaseConfigured, withRequestTimeout } from '../lib/supabase';
 import { useAuth } from './AuthContext';
+import { logError } from '../utils/errors';
 
 const GUEST_TEST_LIMIT = 1;
 const DEVICE_GUEST_COUNT_KEY = '@gradesmart:device_guest_test_count';
 
 const ScansContext = createContext({
   scans: [],
-  addScan: () => {},
-  deleteScan: () => {},
+  addScan: async () => ({ error: null }),
+  deleteScan: async () => ({ error: null }),
   syncing: false,
   syncError: null,
   hydrated: false,
@@ -37,6 +38,8 @@ export function ScansProvider({ children }) {
   const [hydrated, setHydrated] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);
+  const scansRef = useRef(scans);
+  scansRef.current = scans;
   const { user, isGuest } = useAuth();
 
   const STORAGE_KEY = isGuest ? '@gradesmart:scans:guest' : '@gradesmart:scans';
@@ -72,7 +75,7 @@ export function ScansProvider({ children }) {
         setScans(data.map(mapScanRow));
       }
     } catch (e) {
-      console.log('[DASHBOARD] Scans request failed:', e?.message || e);
+      logError('SCANS', e, { operation: 'fetch scans' });
       if (isCurrent()) setSyncError(e);
     } finally {
       if (isCurrent()) setSyncing(false);
@@ -134,7 +137,7 @@ export function ScansProvider({ children }) {
     if (!isGuest && isSupabaseConfigured && user?.id) {
       try {
         const { testId, studentName, score, maxScore, percentage, ...rest } = normalized;
-        await supabase.from('scans').upsert({
+        const { error } = await withRequestTimeout((signal) => supabase.from('scans').upsert({
           id,
           user_id: user.id,
           test_id: testId || null,
@@ -144,27 +147,41 @@ export function ScansProvider({ children }) {
           percentage: parseFloat(percentage) || 0,
           data: rest,
           created_at: createdAt,
-        }, { onConflict: 'id' });
+        }, { onConflict: 'id' }).abortSignal(signal));
+        if (error) throw error;
+      } catch (e) {
+        logError('SCANS', e, { operation: 'save scan' });
+        return { error: null, syncError: e };
+      }
 
-        // Log activity
-        await supabase.from('activities').insert({
-          user_id: user.id,
-          type: 'scan_created',
-          meta: { scan_id: id, test_id: testId || null, student_name: studentName || null },
-        });
-      } catch {}
+      // Activity logging is best-effort and never blocks saving.
+      supabase.from('activities').insert({
+        user_id: user.id,
+        type: 'scan_created',
+        meta: { scan_id: id, test_id: normalized.testId || null, student_name: normalized.studentName || null },
+      }).then(({ error }) => { if (error) logError('ACTIVITY', error, { operation: 'log scan' }); });
     }
     return { error: null };
   }, [user, isGuest, scans.length]);
 
   const deleteScan = useCallback(async (id) => {
+    const removed = scansRef.current.find((s) => s.id === id) || null;
     setScans((prev) => prev.filter((s) => s.id !== id));
 
     if (!isGuest && isSupabaseConfigured && user?.id) {
       try {
-        await supabase.from('scans').delete().eq('id', id).eq('user_id', user.id);
-      } catch {}
+        const { error } = await withRequestTimeout((signal) => supabase
+          .from('scans').delete().eq('id', id).eq('user_id', user.id).abortSignal(signal));
+        if (error) throw error;
+      } catch (e) {
+        logError('SCANS', e, { operation: 'delete scan' });
+        if (removed) {
+          setScans((prev) => (prev.some((s) => s.id === id) ? prev : [...prev, removed]));
+        }
+        return { error: e };
+      }
     }
+    return { error: null };
   }, [user, isGuest]);
 
   const value = useMemo(() => ({ scans, addScan, deleteScan, syncing, syncError, hydrated, refresh, guestTestsRemaining }), [scans, addScan, deleteScan, syncing, syncError, hydrated, refresh, guestTestsRemaining]);
