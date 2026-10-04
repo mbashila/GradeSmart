@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Header from '../components/Header';
 import PressableScale from '../components/PressableScale';
 import ErrorState from '../components/ErrorState';
+import { getActionErrorMessage } from '../utils/errors';
 import { AdminUsersSkeleton } from './skeletons/AdminSkeletons';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
@@ -67,7 +68,7 @@ export default function AdminUsersScreen({ navigation, route }) {
           text: 'Confirm',
           onPress: async () => {
             const { error } = await updateUserRole(u.id, newRole);
-            if (error) Alert.alert('Error', error.message || 'Failed to update role.');
+            if (error) Alert.alert("Couldn't update role", getActionErrorMessage(error));
             else Alert.alert('Done', `${u.full_name || u.email} is now "${newRole}".`);
           },
         },
@@ -178,6 +179,7 @@ export default function AdminUsersScreen({ navigation, route }) {
       ) : users.length === 0 && status.users.error ? (
         <ErrorState
           style={{ marginHorizontal: 24 }}
+          error={status.users.error}
           title="Unable to load users"
           onRetry={fetchUsers}
           retrying={loading}

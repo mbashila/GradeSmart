@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { supabase, isSupabaseConfigured, withRequestTimeout } from '../lib/supabase';
+import { logError } from '../utils/errors';
 
 const NotificationsContext = createContext({
   notifications: [],
@@ -91,7 +92,7 @@ export function NotificationsProvider({ children }) {
         const rows = await fetchNotificationsForUser(userId);
         if (mounted) setNotifications(rows);
       } catch (e) {
-        console.log('Notifications fetch error:', e?.message || e);
+        logError('NOTIFICATIONS', e, { operation: 'fetch notifications' });
         if (mounted) setError(e);
       } finally {
         if (mounted) setLoading(false);
@@ -126,7 +127,7 @@ export function NotificationsProvider({ children }) {
         const rows = await fetchNotificationsForUser(newUserId);
         if (mounted) setNotifications(rows);
       } catch (e) {
-        console.log('Notifications fetch error:', e?.message || e);
+        logError('NOTIFICATIONS', e, { operation: 'fetch notifications' });
         if (mounted) setError(e);
       } finally {
         if (mounted) setLoading(false);
@@ -191,7 +192,7 @@ export function NotificationsProvider({ children }) {
       const rows = await fetchNotificationsForUser(userId);
       if (userIdRef.current === userId) setNotifications(rows);
     } catch (e) {
-      console.log('Notifications refresh error:', e?.message || e);
+      logError('NOTIFICATIONS', e, { operation: 'refresh notifications' });
       if (userIdRef.current === userId) setError(e);
     }
   }, []);
@@ -203,12 +204,15 @@ export function NotificationsProvider({ children }) {
     // Persist to Supabase
     if (isSupabaseConfigured && userIdRef.current) {
       try {
-        await supabase
+        const { error: updateErr } = await supabase
           .from('notifications')
           .update({ read: true })
           .eq('user_id', userIdRef.current)
           .eq('read', false);
-      } catch {}
+        if (updateErr) throw updateErr;
+      } catch (e) {
+        logError('NOTIFICATIONS', e, { operation: 'mark all read' });
+      }
     }
   }, []);
 
@@ -224,8 +228,11 @@ export function NotificationsProvider({ children }) {
     // Persist to Supabase
     if (isSupabaseConfigured) {
       try {
-        await supabase.from('notifications').update({ read: newRead }).eq('id', id);
-      } catch {}
+        const { error: updateErr } = await supabase.from('notifications').update({ read: newRead }).eq('id', id);
+        if (updateErr) throw updateErr;
+      } catch (e) {
+        logError('NOTIFICATIONS', e, { operation: 'toggle read' });
+      }
     }
   }, []);
 

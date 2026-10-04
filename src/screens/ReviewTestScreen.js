@@ -27,7 +27,9 @@ export default function ReviewTestScreen({ navigation, route }) {
     const testId = testData?.id || route?.params?.testId || Date.now().toString();
     const fullTestData = { ...testData, id: testId };
     try {
-      addTest({ id: testId, ...testData });
+      addTest({ id: testId, ...testData }).then((res) => {
+        if (res?.error) showToast("Saved on this device only. Couldn't sync to your account.", 'warning');
+      });
     } catch {}
     showToast('Review confirmed', 'success');
 

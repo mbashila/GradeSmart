@@ -8,6 +8,7 @@ import FormMessage from '../components/FormMessage';
 import PasswordRequirements from '../components/PasswordRequirements';
 import { validatePassword, validatePasswordConfirmation } from '../utils/security';
 import { getAuthErrorMessage } from '../utils/authErrors';
+import { getActionErrorMessage, logError } from '../utils/errors';
 import { ProfileHeaderSkeleton, ProfileAccountSkeleton } from './skeletons/ProfileSkeleton';
 import { useColors, useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -129,7 +130,7 @@ export default function ProfileScreen({ navigation }) {
                     const { error } = await deleteAccount();
                     setSaving(false);
                     if (error) {
-                      Alert.alert('Error', error.message || 'Could not delete account.');
+                      Alert.alert("Couldn't delete account", getActionErrorMessage(error));
                     } else {
                       navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
                     }
@@ -222,8 +223,8 @@ export default function ProfileScreen({ navigation }) {
         contentType: mimeType,
       });
       if (upErr) {
-        console.log('Avatar upload error:', upErr);
-        Alert.alert('Upload failed', upErr.message || 'Could not upload avatar.');
+        logError('AVATAR', upErr, { operation: 'upload avatar' });
+        Alert.alert('Upload failed', getActionErrorMessage(upErr, "Couldn't upload your photo."));
         return;
       }
       const { data: pub } = supabase.storage.from('avatars').getPublicUrl(path);
@@ -232,8 +233,8 @@ export default function ProfileScreen({ navigation }) {
       if (publicUrl) {
         const { error: updErr } = await supabase.auth.updateUser({ data: { avatar_url: publicUrl } });
         if (updErr) {
-          console.log('Avatar metadata update error:', updErr);
-          Alert.alert('Update failed', updErr.message || 'Could not update profile.');
+          logError('AVATAR', updErr, { operation: 'update avatar metadata' });
+          Alert.alert('Update failed', getActionErrorMessage(updErr, "Couldn't update your profile photo."));
           return;
         }
         setAvatarUrl(publicUrl);
@@ -243,8 +244,8 @@ export default function ProfileScreen({ navigation }) {
         Alert.alert('Success', 'Profile picture updated!');
       }
     } catch (e) {
-      console.log('Avatar upload exception:', e);
-      Alert.alert('Error', e.message || 'Could not upload profile picture. Please try again.');
+      logError('AVATAR', e, { operation: 'upload avatar' });
+      Alert.alert('Upload failed', getActionErrorMessage(e, "Couldn't upload your photo."));
     } finally {
       setUploading(false);
     }

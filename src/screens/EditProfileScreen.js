@@ -8,6 +8,9 @@ import AnimatedScreen from '../components/AnimatedScreen';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useAuth } from '../context/AuthContext';
+import FormMessage from '../components/FormMessage';
+import { useToast } from '../components/Toast';
+import { getAuthErrorMessage } from '../utils/authErrors';
 
 export default function EditProfileScreen({ navigation }) {
   const colors = useColors();
@@ -21,6 +24,8 @@ export default function EditProfileScreen({ navigation }) {
   const [location, setLocation] = useState(meta.location || '');
   const [bio, setBio] = useState(meta.bio || '');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const { showToast } = useToast();
   const savingRef = useRef(false);
   const [nameTouched, setNameTouched] = useState(false);
   const phoneRef = useRef(null);
@@ -36,6 +41,7 @@ export default function EditProfileScreen({ navigation }) {
       return;
     }
     savingRef.current = true;
+    setSaveError('');
     setSaving(true);
     const { error } = await updateProfile({
       fullName: fullName.trim(),
@@ -47,11 +53,10 @@ export default function EditProfileScreen({ navigation }) {
     savingRef.current = false;
     setSaving(false);
     if (error) {
-      Alert.alert('Error', error.message || 'Could not update profile.');
+      setSaveError(`Couldn't save your changes. ${getAuthErrorMessage(error, 'Please try again.')}`);
     } else {
-      Alert.alert('Saved', 'Your profile has been updated.', [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
+      showToast('Profile updated successfully.', 'success');
+      navigation.goBack();
     }
   };
 
@@ -146,6 +151,7 @@ export default function EditProfileScreen({ navigation }) {
 
           <AnimatedScreen delay={150}>
             <View style={styles.actions}>
+              <FormMessage message={saveError} />
               <Button
                 title={saving ? 'Saving...' : 'Save Changes'}
                 onPress={handleSave}

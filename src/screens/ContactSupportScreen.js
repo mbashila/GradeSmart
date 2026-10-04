@@ -8,7 +8,10 @@ import { KEYBOARD_AVOIDING_BEHAVIOR } from '../components/FormScrollView';
 import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useAuth } from '../context/AuthContext';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, withRequestTimeout } from '../lib/supabase';
+import FormMessage from '../components/FormMessage';
+import { useToast } from '../components/Toast';
+import { getActionErrorMessage, logError } from '../utils/errors';
 
 const SUPPORT_EMAIL = 'mbashilakuwunda@gmail.com';
 
@@ -21,6 +24,8 @@ export default function ContactSupportScreen({ navigation }) {
   const [queryMessage, setQueryMessage] = useState('');
   const [queryPriority, setQueryPriority] = useState('normal');
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState('');
+  const { showToast } = useToast();
   const queryMessageRef = useRef(null);
 
   const handleSendQuery = async () => {
@@ -33,24 +38,27 @@ export default function ContactSupportScreen({ navigation }) {
       return;
     }
     setSending(true);
+    setSendError('');
     try {
-      const { error } = await supabase.from('support_queries').insert({
+      const { error } = await withRequestTimeout((signal) => supabase.from('support_queries').insert({
         user_id: user.id,
         subject: querySubject.trim(),
         message: queryMessage.trim(),
         priority: queryPriority,
-      });
+      }).abortSignal(signal));
       if (error) {
-        Alert.alert('Error', error.message || 'Failed to send query.');
+        logError('SUPPORT', error, { operation: 'send query' });
+        setSendError(getActionErrorMessage(error, "Couldn't send your message."));
       } else {
-        Alert.alert('Sent!', 'Your query has been submitted. An admin will respond soon.');
+        showToast('Message sent. An admin will respond soon.', 'success');
         setShowQueryModal(false);
         setQuerySubject('');
         setQueryMessage('');
         setQueryPriority('normal');
       }
     } catch (e) {
-      Alert.alert('Error', e.message || 'Something went wrong.');
+      logError('SUPPORT', e, { operation: 'send query' });
+      setSendError(getActionErrorMessage(e, "Couldn't send your message."));
     } finally {
       setSending(false);
     }
@@ -102,7 +110,7 @@ export default function ContactSupportScreen({ navigation }) {
       label: 'Send a Query',
       description: 'Submit a support request in-app',
       detail: 'Admin will respond directly',
-      onPress: () => setShowQueryModal(true),
+      onPress: () => { setSendError(''); setShowQueryModal(true); },
       accent: colors.warning || '#F59E0B',
     },
   ];
@@ -229,6 +237,7 @@ export default function ContactSupportScreen({ navigation }) {
                     </PressableScale>
                   ))}
                 </View>
+                <FormMessage message={sendError} style={{ marginTop: 12, marginBottom: 0 }} />
                 <PressableScale
                   containerStyle={[styles.sendBtn, (!querySubject.trim() || !queryMessage.trim() || sending) && { opacity: 0.5 }]}
                   onPress={handleSendQuery}

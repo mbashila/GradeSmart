@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, RefreshControl, TextInput, Alert, Modal, KeyboardAvoidingView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, RefreshControl, TextInput, Modal, KeyboardAvoidingView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import FormMessage from '../components/FormMessage';
+import { useToast } from '../components/Toast';
+import { getActionErrorMessage } from '../utils/errors';
 import Header from '../components/Header';
 import PressableScale from '../components/PressableScale';
 import { KEYBOARD_AVOIDING_BEHAVIOR } from '../components/FormScrollView';
@@ -26,6 +29,8 @@ export default function AdminQueriesScreen({ navigation }) {
   const [selectedQuery, setSelectedQuery] = useState(null);
   const [replyText, setReplyText] = useState('');
   const [replying, setReplying] = useState(false);
+  const [replyError, setReplyError] = useState('');
+  const { showToast } = useToast();
   const [loadedFilter, setLoadedFilter] = useState(null);
 
   const loadQueries = useCallback(async (f) => {
@@ -51,12 +56,13 @@ export default function AdminQueriesScreen({ navigation }) {
   const handleReply = async () => {
     if (!replyText.trim() || !selectedQuery) return;
     setReplying(true);
+    setReplyError('');
     const { error } = await replyToQuery(selectedQuery.id, replyText.trim(), 'resolved');
     setReplying(false);
     if (error) {
-      Alert.alert('Error', error.message || 'Failed to reply.');
+      setReplyError(getActionErrorMessage(error, "Couldn't send your reply."));
     } else {
-      Alert.alert('Sent', 'Reply sent successfully.');
+      showToast('Reply sent.', 'success');
       setSelectedQuery(null);
       setReplyText('');
       fetchQueries(filter);
@@ -83,7 +89,7 @@ export default function AdminQueriesScreen({ navigation }) {
   };
 
   const renderQuery = useCallback(({ item: q }) => (
-    <PressableScale containerStyle={styles.queryCard} onPress={() => { setSelectedQuery(q); setReplyText(''); }}>
+    <PressableScale containerStyle={styles.queryCard} onPress={() => { setSelectedQuery(q); setReplyText(''); setReplyError(''); }}>
       <View style={styles.queryHeader}>
         <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(q.priority) }]} />
         <Text style={styles.querySubject} numberOfLines={1}>{q.subject}</Text>
@@ -136,6 +142,7 @@ export default function AdminQueriesScreen({ navigation }) {
             <AdminQueryCardsSkeleton styles={styles} />
           ) : loadError ? (
             <ErrorState
+              error={status.queries.error}
               title="Unable to load queries"
               onRetry={() => loadQueries(filter)}
               retrying={status.queries.loading}
@@ -197,6 +204,7 @@ export default function AdminQueriesScreen({ navigation }) {
                   multiline
                   textAlignVertical="top"
                 />
+                <FormMessage message={replyError} style={{ marginTop: 12, marginBottom: 0 }} />
                 <PressableScale
                   containerStyle={[styles.replyBtn, (!replyText.trim() || replying) && { opacity: 0.5 }]}
                   onPress={handleReply}

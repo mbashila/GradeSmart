@@ -50,7 +50,9 @@ export default function CreateTestScreen({ navigation, route }) {
       }
     }
     try {
-      addTest({ id, name: testName, testName, subject, classRoom, numberOfQuestions, totalPoints, numberOfStudents });
+      addTest({ id, name: testName, testName, subject, classRoom, numberOfQuestions, totalPoints, numberOfStudents }).then((res) => {
+        if (res?.error) showToast("Saved on this device only. Couldn't sync to your account.", 'warning');
+      });
     } catch {}
     showToast('Details saved', 'success');
     navigation.navigate('QuestionType', {

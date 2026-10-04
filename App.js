@@ -57,10 +57,55 @@ import NotificationDetailScreen from './src/screens/NotificationDetailScreen';
 import ThemePickerScreen from './src/screens/ThemePickerScreen';
 import LanguagePickerScreen from './src/screens/LanguagePickerScreen';
 import { AdminProvider } from './src/context/AdminContext';
+import ErrorBoundary, { withScreenErrorBoundary } from './src/components/ErrorBoundary';
+import OfflineBanner from './src/components/OfflineBanner';
 import './src/i18n';
 import { supabase } from './src/lib/supabase';
 
 const Stack = createStackNavigator();
+
+// Each screen gets its own error boundary so a render crash shows a
+// recoverable fallback and leaves the rest of the app navigable.
+const guardedScreens = Object.fromEntries(Object.entries({
+  Welcome: WelcomeScreen,
+  Login: LoginScreen,
+  SignUp: SignUpScreen,
+  Dashboard: DashboardScreen,
+  CreateTest: CreateTestScreen,
+  QuestionType: QuestionTypeScreen,
+  ReviewTest: ReviewTestScreen,
+  Scan: ScanScreen,
+  ScanConfirmation: ScanConfirmationScreen,
+  Results: ResultsScreen,
+  ReviewCorrection: ReviewCorrectionScreen,
+  History: HistoryScreen,
+  TestDetails: TestDetailsScreen,
+  Profile: ProfileScreen,
+  Notifications: NotificationsScreen,
+  MCQAnswerInput: MCQAnswerInputScreen,
+  EssayScoring: EssayScoringScreen,
+  MixedScoring: MixedScoringScreen,
+  Payment: PaymentScreen,
+  VerifyOTP: VerifyOTPScreen,
+  AppVersion: AppVersionScreen,
+  PrivacySettings: PrivacySettingsScreen,
+  HelpCenter: HelpCenterScreen,
+  ContactSupport: ContactSupportScreen,
+  EditProfile: EditProfileScreen,
+  ProfileDetails: ProfileDetailsScreen,
+  AdminDashboard: AdminDashboardScreen,
+  AdminUsers: AdminUsersScreen,
+  AdminUserDetail: AdminUserDetailScreen,
+  AdminQueries: AdminQueriesScreen,
+  TermsOfService: TermsOfServiceScreen,
+  PrivacyPolicy: PrivacyPolicyScreen,
+  ResetPassword: ResetPasswordScreen,
+  NotificationDetail: NotificationDetailScreen,
+  ThemePicker: ThemePickerScreen,
+  LanguagePicker: LanguagePickerScreen,
+}).map(([name, Screen]) => [name, withScreenErrorBoundary(Screen, name)]));
+
+const AUTH_ROUTES = new Set(['Welcome', 'Login', 'SignUp', 'VerifyOTP', 'ResetPassword']);
 
 const HAS_SEEN_KEY = '@gradesmart:has_seen_app';
 
@@ -112,42 +157,42 @@ function RootNavigator() {
         ...TransitionPresets.SlideFromRightIOS,
       }}
     >
-      <Stack.Screen name="Welcome" component={WelcomeScreen} />
-      <Stack.Screen name="Login" component={LoginScreen} />
-      <Stack.Screen name="SignUp" component={SignUpScreen} />
-      <Stack.Screen name="Dashboard" component={DashboardScreen} />
-      <Stack.Screen name="CreateTest" component={CreateTestScreen} />
-      <Stack.Screen name="QuestionType" component={QuestionTypeScreen} />
-      <Stack.Screen name="ReviewTest" component={ReviewTestScreen} />
-      <Stack.Screen name="Scan" component={ScanScreen} />
-      <Stack.Screen name="ScanConfirmation" component={ScanConfirmationScreen} />
-      <Stack.Screen name="Results" component={ResultsScreen} />
-      <Stack.Screen name="ReviewCorrection" component={ReviewCorrectionScreen} />
-      <Stack.Screen name="History" component={HistoryScreen} />
-      <Stack.Screen name="TestDetails" component={TestDetailsScreen} />
-      <Stack.Screen name="Profile" component={ProfileScreen} />
-      <Stack.Screen name="Notifications" component={NotificationsScreen} />
-      <Stack.Screen name="MCQAnswerInput" component={MCQAnswerInputScreen} />
-      <Stack.Screen name="EssayScoring" component={EssayScoringScreen} />
-      <Stack.Screen name="MixedScoring" component={MixedScoringScreen} />
-      <Stack.Screen name="Payment" component={PaymentScreen} />
-      <Stack.Screen name="VerifyOTP" component={VerifyOTPScreen} />
-      <Stack.Screen name="AppVersion" component={AppVersionScreen} />
-      <Stack.Screen name="PrivacySettings" component={PrivacySettingsScreen} />
-      <Stack.Screen name="HelpCenter" component={HelpCenterScreen} />
-      <Stack.Screen name="ContactSupport" component={ContactSupportScreen} />
-      <Stack.Screen name="EditProfile" component={EditProfileScreen} />
-      <Stack.Screen name="ProfileDetails" component={ProfileDetailsScreen} />
-      <Stack.Screen name="AdminDashboard" component={AdminDashboardScreen} />
-      <Stack.Screen name="AdminUsers" component={AdminUsersScreen} />
-      <Stack.Screen name="AdminUserDetail" component={AdminUserDetailScreen} />
-      <Stack.Screen name="AdminQueries" component={AdminQueriesScreen} />
-      <Stack.Screen name="TermsOfService" component={TermsOfServiceScreen} />
-      <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
-      <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
-      <Stack.Screen name="NotificationDetail" component={NotificationDetailScreen} />
-      <Stack.Screen name="ThemePicker" component={ThemePickerScreen} />
-      <Stack.Screen name="LanguagePicker" component={LanguagePickerScreen} />
+      <Stack.Screen name="Welcome" component={guardedScreens.Welcome} />
+      <Stack.Screen name="Login" component={guardedScreens.Login} />
+      <Stack.Screen name="SignUp" component={guardedScreens.SignUp} />
+      <Stack.Screen name="Dashboard" component={guardedScreens.Dashboard} />
+      <Stack.Screen name="CreateTest" component={guardedScreens.CreateTest} />
+      <Stack.Screen name="QuestionType" component={guardedScreens.QuestionType} />
+      <Stack.Screen name="ReviewTest" component={guardedScreens.ReviewTest} />
+      <Stack.Screen name="Scan" component={guardedScreens.Scan} />
+      <Stack.Screen name="ScanConfirmation" component={guardedScreens.ScanConfirmation} />
+      <Stack.Screen name="Results" component={guardedScreens.Results} />
+      <Stack.Screen name="ReviewCorrection" component={guardedScreens.ReviewCorrection} />
+      <Stack.Screen name="History" component={guardedScreens.History} />
+      <Stack.Screen name="TestDetails" component={guardedScreens.TestDetails} />
+      <Stack.Screen name="Profile" component={guardedScreens.Profile} />
+      <Stack.Screen name="Notifications" component={guardedScreens.Notifications} />
+      <Stack.Screen name="MCQAnswerInput" component={guardedScreens.MCQAnswerInput} />
+      <Stack.Screen name="EssayScoring" component={guardedScreens.EssayScoring} />
+      <Stack.Screen name="MixedScoring" component={guardedScreens.MixedScoring} />
+      <Stack.Screen name="Payment" component={guardedScreens.Payment} />
+      <Stack.Screen name="VerifyOTP" component={guardedScreens.VerifyOTP} />
+      <Stack.Screen name="AppVersion" component={guardedScreens.AppVersion} />
+      <Stack.Screen name="PrivacySettings" component={guardedScreens.PrivacySettings} />
+      <Stack.Screen name="HelpCenter" component={guardedScreens.HelpCenter} />
+      <Stack.Screen name="ContactSupport" component={guardedScreens.ContactSupport} />
+      <Stack.Screen name="EditProfile" component={guardedScreens.EditProfile} />
+      <Stack.Screen name="ProfileDetails" component={guardedScreens.ProfileDetails} />
+      <Stack.Screen name="AdminDashboard" component={guardedScreens.AdminDashboard} />
+      <Stack.Screen name="AdminUsers" component={guardedScreens.AdminUsers} />
+      <Stack.Screen name="AdminUserDetail" component={guardedScreens.AdminUserDetail} />
+      <Stack.Screen name="AdminQueries" component={guardedScreens.AdminQueries} />
+      <Stack.Screen name="TermsOfService" component={guardedScreens.TermsOfService} />
+      <Stack.Screen name="PrivacyPolicy" component={guardedScreens.PrivacyPolicy} />
+      <Stack.Screen name="ResetPassword" component={guardedScreens.ResetPassword} />
+      <Stack.Screen name="NotificationDetail" component={guardedScreens.NotificationDetail} />
+      <Stack.Screen name="ThemePicker" component={guardedScreens.ThemePicker} />
+      <Stack.Screen name="LanguagePicker" component={guardedScreens.LanguagePicker} />
     </Stack.Navigator>
   );
 }
@@ -164,7 +209,35 @@ const linking = {
 function AppInner() {
   const colors = useColors();
   const { isDark } = useTheme();
+  const { user, sessionExpired } = useAuth();
   const navigationRef = useRef(null);
+  const lastAuthedRouteRef = useRef(null);
+  const resumeRouteRef = useRef(null);
+
+  // Remember where a signed-in user was, so an expired session can return
+  // them there after logging in again.
+  const handleStateChange = useCallback(() => {
+    const route = navigationRef.current?.getCurrentRoute?.();
+    if (user && route && !AUTH_ROUTES.has(route.name)) {
+      lastAuthedRouteRef.current = { name: route.name, params: route.params };
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (sessionExpired && lastAuthedRouteRef.current) {
+      resumeRouteRef.current = lastAuthedRouteRef.current;
+    }
+  }, [sessionExpired]);
+
+  useEffect(() => {
+    if (!user) return;
+    const target = resumeRouteRef.current;
+    resumeRouteRef.current = null;
+    const nav = navigationRef.current;
+    if (!target || target.name === 'Dashboard' || !nav?.isReady?.()) return;
+    if (!nav.getRootState?.()?.routeNames?.includes(target.name)) return;
+    nav.reset({ index: 1, routes: [{ name: 'Dashboard' }, target] });
+  }, [user?.id]);
 
   // Listen for Supabase PASSWORD_RECOVERY event and navigate to reset screen
   useEffect(() => {
@@ -181,7 +254,8 @@ function AppInner() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['top']}>
-      <NavigationContainer ref={navigationRef} linking={linking}>
+      <OfflineBanner />
+      <NavigationContainer ref={navigationRef} linking={linking} onStateChange={handleStateChange}>
         <StatusBar style={isDark ? 'light' : 'dark'} translucent={false} backgroundColor={colors.background} />
         <RootNavigator />
       </NavigationContainer>
@@ -205,7 +279,9 @@ export default function App() {
               <TestsProvider>
                 <ScansProvider>
                   <ToastProvider>
-                    <AppInner />
+                    <ErrorBoundary name="App">
+                      <AppInner />
+                    </ErrorBoundary>
                 </ToastProvider>
               </ScansProvider>
             </TestsProvider>

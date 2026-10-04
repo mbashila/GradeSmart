@@ -1,5 +1,8 @@
 import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import { supabase, isSupabaseConfigured, withRequestTimeout } from '../lib/supabase';
+import { logError } from '../utils/errors';
+
+const NOT_CONFIGURED = { message: 'Not configured', code: 'not_configured' };
 
 const IDLE = { loading: false, loaded: false, error: null };
 const INITIAL_STATUS = { users: IDLE, stats: IDLE, queries: IDLE, activeUsers: IDLE };
@@ -42,7 +45,7 @@ export function AdminProvider({ children }) {
       onData(data);
       setResourceStatus(key, { loading: false, loaded: true, error: null });
     } catch (e) {
-      console.log(`Admin ${fn} error:`, e?.message || e);
+      logError('ADMIN', e, { operation: fn });
       setResourceStatus(key, { loading: false, error: e });
     }
   }, [setResourceStatus]);
@@ -68,7 +71,7 @@ export function AdminProvider({ children }) {
   );
 
   const updateUserRole = useCallback(async (targetUserId, newRole) => {
-    if (!isSupabaseConfigured) return { error: { message: 'Not configured' } };
+    if (!isSupabaseConfigured) return { error: NOT_CONFIGURED };
     try {
       const { error } = await supabase.rpc('admin_update_role', {
         target_user_id: targetUserId,
@@ -77,14 +80,16 @@ export function AdminProvider({ children }) {
       if (!error) {
         setUsers(prev => prev.map(u => u.id === targetUserId ? { ...u, role: newRole } : u));
       }
+      if (error) logError('ADMIN', error, { operation: 'admin_update_role' });
       return { error };
     } catch (e) {
-      return { error: { message: e.message } };
+      logError('ADMIN', e, { operation: 'admin_update_role' });
+      return { error: e };
     }
   }, []);
 
   const toggleBan = useCallback(async (targetUserId, shouldBan, reason = null) => {
-    if (!isSupabaseConfigured) return { error: { message: 'Not configured' } };
+    if (!isSupabaseConfigured) return { error: NOT_CONFIGURED };
     try {
       const { error } = await supabase.rpc('admin_toggle_ban', {
         target_user_id: targetUserId,
@@ -96,14 +101,16 @@ export function AdminProvider({ children }) {
           u.id === targetUserId ? { ...u, is_banned: shouldBan, ban_reason: reason } : u
         ));
       }
+      if (error) logError('ADMIN', error, { operation: 'admin_toggle_ban' });
       return { error };
     } catch (e) {
-      return { error: { message: e.message } };
+      logError('ADMIN', e, { operation: 'admin_toggle_ban' });
+      return { error: e };
     }
   }, []);
 
   const replyToQuery = useCallback(async (queryId, reply, status = 'resolved') => {
-    if (!isSupabaseConfigured) return { error: { message: 'Not configured' } };
+    if (!isSupabaseConfigured) return { error: NOT_CONFIGURED };
     try {
       const { error } = await supabase.rpc('admin_reply_query', {
         p_query_id: queryId,
@@ -115,9 +122,11 @@ export function AdminProvider({ children }) {
           q.id === queryId ? { ...q, admin_reply: reply, status, replied_at: new Date().toISOString() } : q
         ));
       }
+      if (error) logError('ADMIN', error, { operation: 'admin_reply_query' });
       return { error };
     } catch (e) {
-      return { error: { message: e.message } };
+      logError('ADMIN', e, { operation: 'admin_reply_query' });
+      return { error: e };
     }
   }, []);
 

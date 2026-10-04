@@ -39,7 +39,7 @@ export default function LoginScreen({ navigation }) {
   const resetSubmittingRef = useRef(false);
   const identifierRef = useRef(null);
   const passwordRef = useRef(null);
-  const { signIn, signInWithPhone, signInAsGuest, resetPassword, isConfigured } = useAuth();
+  const { signIn, signInWithPhone, signInAsGuest, resetPassword, isConfigured, sessionExpired } = useAuth();
   const { showToast } = useToast();
 
   const isPhone = isPhoneNumber(identifier);
@@ -78,7 +78,7 @@ export default function LoginScreen({ navigation }) {
     setSubmitted(true);
     setFormError('');
     if (!isConfigured) {
-      setFormError('Supabase not configured. Add your credentials to app.json extra.');
+      setFormError("Sign-in isn't available right now. Please try again later.");
       return;
     }
     if (identifierError) {
@@ -168,7 +168,7 @@ export default function LoginScreen({ navigation }) {
 
   const handleSocialLogin = async (provider) => {
     if (!isConfigured) {
-      showToast('Supabase not configured.', 'error');
+      showToast("Sign-in isn't available right now.", 'error');
       return;
     }
     setSocialLoading(provider);
@@ -182,7 +182,7 @@ export default function LoginScreen({ navigation }) {
         },
       });
       if (error) {
-        showToast(error.message || `${provider} sign-in failed`, 'error');
+        showToast(getAuthErrorMessage(error, `Couldn't sign in with ${provider}. Please try again.`), 'error');
         return;
       }
       if (data?.url) {
@@ -199,7 +199,7 @@ export default function LoginScreen({ navigation }) {
         }
       }
     } catch (e) {
-      showToast(`${provider} sign-in failed`, 'error');
+      showToast(getAuthErrorMessage(e, `Couldn't sign in with ${provider}. Please try again.`), 'error');
     } finally {
       setSocialLoading(null);
     }
@@ -219,6 +219,9 @@ export default function LoginScreen({ navigation }) {
             </View>
 
             <View style={styles.formCard}>
+              {sessionExpired && !formError && (
+                <FormMessage type="warning" message="Your session has expired. Please log in again." />
+              )}
               <FormMessage message={formError} />
 
               <Input

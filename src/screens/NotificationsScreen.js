@@ -79,6 +79,7 @@ export default function NotificationsScreen({ navigation }) {
             <NotificationsSkeleton styles={styles} />
           ) : error && notifications.length === 0 ? (
             <ErrorState
+              error={error}
               title="Unable to load notifications"
               onRetry={onRetry}
               retrying={retrying}

@@ -9,6 +9,7 @@ import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { gradeMixed } from '../utils/grading';
 import { getOpenAIKey, detectAnswersWithAI } from '../utils/openaiService';
+import { getAiErrorMessage } from '../utils/errors';
 import { getGradingMode } from '../components/SubjectPicker';
 import { deriveQuestionStats } from '../utils/questionUtils';
 import useEssayGradingPipeline from '../hooks/useEssayGradingPipeline';
@@ -188,7 +189,7 @@ export default function MixedScoringScreen({ navigation, route }) {
             const detected = newAnswers.filter((a) => a !== '').length;
             setMcqMsg(`MCQ: ${detected}/${mcqCount} detected.`);
           } else {
-            setMcqMsg(`MCQ detection failed: ${mcqResult.error}`);
+            setMcqMsg(`Couldn't read the MCQ answers. ${getAiErrorMessage(mcqResult.error)}`);
           }
         } catch {
           if (!cancelled.value) setMcqMsg('MCQ scan failed.');

@@ -11,6 +11,7 @@ import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import { useScans } from '../context/ScansContext';
 import { useToast } from '../components/Toast';
+import { getActionErrorMessage, logError } from '../utils/errors';
 
 export default function ResultsScreen({ navigation, route }) {
   const colors = useColors();
@@ -177,7 +178,8 @@ export default function ResultsScreen({ navigation, route }) {
         Alert.alert('Exported', 'PDF generated successfully.');
       }
     } catch (e) {
-      Alert.alert('Export Failed', e.message || 'Could not export results.');
+      logError('EXPORT', e, { operation: 'export pdf' });
+      Alert.alert('Export failed', getActionErrorMessage(e, "Couldn't export the results."));
     } finally {
       setExporting(false);
     }
@@ -201,9 +203,11 @@ export default function ResultsScreen({ navigation, route }) {
         testId,
         gradingResults: gradingResults || [],
         gradingType: gradingType || null,
+      }).then((res) => {
+        if (res?.syncError) showToast("Saved on this device only. Couldn't sync to your account.", 'warning');
       });
     } catch (e) {
-      // no-op; saving is best-effort for now
+      logError('SCANS', e, { operation: 'save scan' });
     }
     if (isLastStudent) {
       showToast(`All ${expectedStudents} students graded!`, 'success');
