@@ -1,16 +1,22 @@
 import React from 'react';
-import { transcribeHandwritingWithVision, gradeEssayTextWithOpenAI, gradeDiagramWithVision, gradeSectionAnswersWithVision } from '../utils/openaiService';
-import { splitTranscriptionByQuestions } from '../utils/questionUtils';
+import { extractStudentAnswers, gradeEssayTextWithOpenAI, gradeDiagramWithVision } from '../utils/openaiService';
+import { answersForGrading, deriveQuestionStatuses, buildQuestionIndex, reviewSummary } from '../utils/answerMatching';
 import { getAiErrorMessage } from '../utils/errors';
 import { useNotifications } from '../context/NotificationsContext';
+
+// Pipeline: 'idle' -> 'ocr' (read booklet) -> 'review' (teacher checks answer matches)
+//           -> 'ai' (grade confirmed answers) -> 'done'.
+// Answers are only graded through matched/confirmed associations. Questions whose answers
+// could not be read or matched are flagged for manual scoring instead of being given zero.
 
 export default function useEssayGradingPipeline(params) {
   const {
     images = [],
-    sectionImages = null, // Array of { sectionIndex, label, type, images, questions?, questionTexts? }
-    sectionData = [],     // From testData.sectionData — used to map section questions
+    sectionImages = null, // Array of { sectionIndex, label, type, images, expectedPages? }
+    sectionData = [],     // From testData.sectionData — the Stage 1 question model per section
     questionCount = 0,
     questionTexts = [],
+    questions = null,     // Flat question list for tests without sections (testData.extractedQuestions)
     scores = [],
     setScores = () => {},
     subject = '',
@@ -21,25 +27,17 @@ export default function useEssayGradingPipeline(params) {
 
   const { addNotification } = useNotifications();
 
-  const [transcriptions, setTranscriptions] = React.useState(
-    Array.from({ length: questionCount }, () => '')
-  );
-
-  const [aiFeedback, setAiFeedback] = React.useState(
-    Array.from({ length: questionCount }, () => '')
-  );
-
+  const [transcriptions, setTranscriptions] = React.useState(() => Array.from({ length: questionCount }, () => ''));
+  const [aiFeedback, setAiFeedback] = React.useState(() => Array.from({ length: questionCount }, () => ''));
   const [pipelineStep, setPipelineStep] = React.useState('idle');
   const [pipelineMsg, setPipelineMsg] = React.useState('');
   const [pipelineDone, setPipelineDone] = React.useState(false);
-
   const [ocrPageProgress, setOcrPageProgress] = React.useState({ current: 0, total: 0 });
   const [pageTexts, setPageTexts] = React.useState([]);
   const [fullOcrText, setFullOcrText] = React.useState('');
-
-  // Cache of vision-based section grading results, keyed by global question index:
-  // { [globalQIdx]: { score, feedback } }. Set during section OCR, applied on confirm.
-  const visionResultsRef = React.useRef(null);
+  // { sections: [{ key, label, type, images, questions, startIdx, features, status, error, records, completeness, completeOverride, failedPages, issues, questionStatuses }] }
+  const [answerReview, setAnswerReview] = React.useState(null);
+  const lastImagesRef = React.useRef(null);
 
   const markDone = React.useCallback((message = '') => {
     setPipelineMsg(message);
@@ -47,315 +45,277 @@ export default function useEssayGradingPipeline(params) {
     setPipelineDone(true);
   }, []);
 
-  // Build section-to-question mapping for section-by-section OCR
-  const sectionQuestionMap = React.useMemo(() => {
-    if (!sectionImages || !sectionData || sectionData.length === 0) return null;
-    let globalIdx = 0;
-    return sectionData.map((sec, secIdx) => {
-      const secQuestions = Array.isArray(sec.questions) ? sec.questions : [];
-      const qCount = secQuestions.length;
-      const qTexts = secQuestions.map(q => q.text || `Question ${q.number || ''}`);
-      const features = {
-        hasDiagrams: !!sec.hasDiagrams,
-        hasCalculations: !!sec.hasCalculations,
-        hasGraphs: !!sec.hasGraphs,
-        hasTables: !!sec.hasTables,
-        hasMaps: !!sec.hasMaps,
-        hasCodeSnippets: !!sec.hasCodeSnippets,
-        hasTrueFalse: !!sec.hasTrueFalse,
-      };
-      const startIdx = globalIdx;
-      globalIdx += qCount;
-      return { secIdx, qCount, qTexts, questions: secQuestions, startIdx, type: sec.type, label: sec.label, features };
-    });
-  }, [sectionImages, sectionData]);
+  // One reading unit per section that has answer pages; without sections, the whole booklet.
+  const readingUnits = React.useMemo(() => {
+    if (sectionImages && sectionData.length > 0) {
+      let globalIdx = 0;
+      return sectionData.map((sec, secIdx) => {
+        const qs = Array.isArray(sec.questions) ? sec.questions : [];
+        const startIdx = globalIdx;
+        globalIdx += qs.length;
+        return {
+          key: `s${secIdx}`,
+          label: sec.label || '',
+          type: sec.type,
+          images: sectionImages[secIdx]?.images || [],
+          expectedPages: sectionImages[secIdx]?.expectedPages || null,
+          questions: qs,
+          startIdx,
+          features: { hasDiagrams: !!sec.hasDiagrams },
+        };
+      }).filter(u => u.questions.length > 0);
+    }
+    const qs = Array.isArray(questions) && questions.length
+      ? questions.slice(0, questionCount || questions.length)
+      : Array.from({ length: questionCount }, (_, i) => ({ number: i + 1, text: questionTexts[i] || `Question ${i + 1}`, maxPoints: scores[i]?.maxPoints || 0 }));
+    return [{ key: 's0', label: '', type: '', images: images || [], expectedPages: null, questions: qs, startIdx: 0, features: {} }];
+  }, [sectionImages, sectionData, questions, questionCount, questionTexts, images]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const isComplete = (sec) => (sec.completeOverride !== undefined && sec.completeOverride !== null ? sec.completeOverride : !!sec.completeness?.complete);
+
+  const withStatuses = (sec) => ({
+    ...sec,
+    questionStatuses: deriveQuestionStatuses(sec.questions, sec.records || [], { complete: isComplete(sec), extractionFailed: sec.status === 'error' }),
+  });
+
+  const readUnit = React.useCallback(async (unit, onProgress) => {
+    if (!unit.images.length) {
+      return withStatuses({ ...unit, status: 'error', error: 'No answer pages were captured for this section.', records: [], failedPages: [], issues: [], completeness: { complete: false, reasons: ['No pages captured.'] } });
+    }
+    try {
+      const res = await extractStudentAnswers(unit.images, unit.questions, {
+        subject,
+        sectionLabel: unit.label,
+        expectedPages: unit.expectedPages,
+        onProgress,
+      });
+      return withStatuses({
+        ...unit,
+        status: res.status,
+        error: res.status === 'error' ? getAiErrorMessage(res.error) : '',
+        records: res.records,
+        completeness: res.completeness,
+        failedPages: res.failedPages,
+        issues: res.issues,
+      });
+    } catch (e) {
+      return withStatuses({ ...unit, status: 'error', error: getAiErrorMessage(e?.message || e), records: [], failedPages: [], issues: [], completeness: { complete: false, reasons: ['Extraction failed.'] } });
+    }
+  }, [subject]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const syncTexts = React.useCallback((sections) => {
+    const parts = [];
+    sections.forEach((sec) => (sec.records || []).forEach((r) => {
+      if (r.text) parts.push(`${sec.label ? `[Section ${sec.label}] ` : ''}${r.rawLabel || '(no label)'}: ${r.text}`);
+    }));
+    setPageTexts(parts);
+    setFullOcrText(parts.join('\n\n'));
+  }, []);
 
   const runOcrOnAllPages = React.useCallback(async (imgs, cancelled = { value: false }) => {
     setPipelineStep('ocr');
-    setPageTexts([]);
-    setFullOcrText('');
-    visionResultsRef.current = null;
-
-    // ── Section-by-section VISION grading ──
-    // For each section, send the answer image(s) + that section's questions to the
-    // vision model in ONE call. The model reads handwriting, matches each answer to
-    // its question, and grades — far more reliable than OCR-then-regex-split.
-    if (sectionImages && sectionQuestionMap && sectionQuestionMap.length > 0) {
-      const gradableSections = sectionImages.filter((s, i) => (s.images?.length || 0) > 0 && sectionQuestionMap[i]?.qCount > 0);
-      setOcrPageProgress({ current: 0, total: gradableSections.length });
-      let sectionsDone = 0;
-
-      const perQuestion = Array.from({ length: questionCount }, () => '');
-      const visionResults = {}; // globalQIdx -> { score, feedback }
-      let anyAnswer = false;
-      let anyError = null;
-
-      for (let si = 0; si < sectionImages.length; si++) {
-        if (cancelled.value) return;
-        const secImgs = sectionImages[si]?.images || [];
-        const mapping = sectionQuestionMap[si];
-        if (!mapping || secImgs.length === 0 || mapping.qCount === 0) continue;
-
-        sectionsDone++;
-        setOcrPageProgress({ current: sectionsDone, total: gradableSections.length });
-        setPipelineMsg(`Grading Section ${mapping.label} (${mapping.qCount} question${mapping.qCount > 1 ? 's' : ''})...`);
-
-        // Build the questions payload using global maxPoints (from scores) when available
-        const sectionQuestions = mapping.questions.map((q, qi) => {
-          const globalQIdx = mapping.startIdx + qi;
-          return {
-            number: q.number || (globalQIdx + 1),
-            text: q.text || `Question ${q.number || globalQIdx + 1}`,
-            maxPoints: scores[globalQIdx]?.maxPoints || q.maxPoints || 0,
-            type: q.type,
-          };
-        });
-
-        let secResult;
-        try {
-          secResult = await gradeSectionAnswersWithVision(secImgs, sectionQuestions, {
-            subject,
-            gradeLevel,
-            sectionLabel: mapping.label,
-            sectionType: mapping.type,
-            features: mapping.features,
-          });
-        } catch (e) {
-          secResult = { results: [], error: e.message };
-        }
-        if (cancelled.value) return;
-
-        if (secResult.error) anyError = secResult.error;
-
-        const results = secResult.results || [];
-        for (let qi = 0; qi < mapping.qCount; qi++) {
-          const globalQIdx = mapping.startIdx + qi;
-          if (globalQIdx >= questionCount) break;
-          const r = results[qi] || {};
-          const answer = String(r.transcribedAnswer || '').trim();
-          perQuestion[globalQIdx] = answer;
-          if (answer) anyAnswer = true;
-          visionResults[globalQIdx] = {
-            score: typeof r.score === 'number' ? r.score : 0,
-            feedback: r.feedback || '',
-          };
-        }
-      }
-
-      if (cancelled.value) return;
-
-      // Build a readable combined transcript for the "Full Extracted Text" view
-      const combinedParts = [];
-      for (let si = 0; si < sectionQuestionMap.length; si++) {
-        const mapping = sectionQuestionMap[si];
-        if (!mapping || mapping.qCount === 0) continue;
-        for (let qi = 0; qi < mapping.qCount; qi++) {
-          const globalQIdx = mapping.startIdx + qi;
-          const ans = perQuestion[globalQIdx];
-          if (ans) combinedParts.push(`Q${globalQIdx + 1}: ${ans}`);
-        }
-      }
-      const combined = combinedParts.join('\n\n');
-      setPageTexts(combinedParts);
-      setFullOcrText(combined);
-      setTranscriptions(perQuestion);
-
-      if (!anyAnswer) {
-        visionResultsRef.current = null;
-        markDone(anyError ? `Couldn't read the answers. ${getAiErrorMessage(anyError)} Score manually.` : "Couldn't read any answers. Score manually.");
-        return;
-      }
-
-      // Cache the vision scores so handleConfirmOCR applies them without re-calling AI
-      visionResultsRef.current = visionResults;
-
-      setPipelineMsg(`Read & graded ${gradableSections.length} section(s). Review the answers below, then continue.`);
-      setPipelineStep('review');
-
-      addNotification({
-        type: 'success',
-        title: 'Answers read & graded',
-        message: `Graded ${gradableSections.length} section(s) for ${studentName}.`,
-      });
+    setPipelineDone(false);
+    setAnswerReview(null);
+    lastImagesRef.current = imgs;
+    // Without sections, read the pages the caller passed (e.g. Mixed skips its MCQ sheet).
+    const units = (sectionImages ? readingUnits : readingUnits.map(u => ({ ...u, images: Array.isArray(imgs) && imgs.length ? imgs : u.images })))
+      .filter(u => u.images.length > 0 || sectionImages);
+    if (!units.length || units.every(u => !u.images.length)) {
+      markDone('No answer pages captured. Score manually.');
       return;
     }
-
-    // ── Flat OCR (legacy, no sections) ──
-    setOcrPageProgress({ current: 0, total: imgs.length });
-    setPipelineMsg(`Reading handwriting from page 1 of ${imgs.length}...`);
-
-    const texts = [];
-    for (let i = 0; i < imgs.length; i++) {
+    setOcrPageProgress({ current: 0, total: units.length });
+    const done = [];
+    for (let i = 0; i < units.length; i++) {
       if (cancelled.value) return;
-      setOcrPageProgress({ current: i + 1, total: imgs.length });
-      setPipelineMsg(`Reading handwriting from page ${i + 1} of ${imgs.length}...`);
-      try {
-        const ocrResult = await transcribeHandwritingWithVision(imgs[i], {
-          questionCount,
-          questionTexts,
-          subject,
-        });
-        texts.push(ocrResult.error ? '' : (ocrResult.text || ''));
-      } catch {
-        texts.push('');
-      }
+      const u = units[i];
+      setOcrPageProgress({ current: i + 1, total: units.length });
+      setPipelineMsg(`Reading ${u.label ? `Section ${u.label} ` : ''}answers (${u.images.length} page${u.images.length === 1 ? '' : 's'})...`);
+      done.push(await readUnit(u, ({ pages, total }) => {
+        if (total > pages.length) setPipelineMsg(`Reading ${u.label ? `Section ${u.label}, ` : ''}page${pages.length > 1 ? 's' : ''} ${pages.join(', ')} of ${total}...`);
+      }));
     }
     if (cancelled.value) return;
 
-    setPageTexts(texts);
-    const combined = texts.map(t => String(t || '').trim()).filter(Boolean).join('\n\n');
-    setFullOcrText(combined);
-
-    if (!combined.trim()) {
-      markDone('Could not read handwriting from any page. Score manually.');
-      return;
-    }
-
-    const perQuestion = splitTranscriptionByQuestions(combined, questionCount);
-    setTranscriptions(perQuestion);
-
-    const pageCount = texts.filter(t => String(t || '').trim()).length;
-    setPipelineMsg(`Read handwriting from ${pageCount} page(s). Review below, then continue.`);
+    setAnswerReview({ sections: done });
+    syncTexts(done);
+    const failed = done.filter(s => s.status === 'error').length;
+    const summary = done.reduce((acc, s) => {
+      const r = reviewSummary(s.records || []);
+      return { total: acc.total + r.total, needsReview: acc.needsReview + r.needsReview };
+    }, { total: 0, needsReview: 0 });
+    setPipelineMsg(failed === done.length
+      ? "Couldn't read the answer pages. Retry, or score manually."
+      : `Found ${summary.total} answer${summary.total === 1 ? '' : 's'}${summary.needsReview ? ` — ${summary.needsReview} need${summary.needsReview === 1 ? 's' : ''} your review` : ''}.`);
     setPipelineStep('review');
+    if (failed < done.length) {
+      addNotification({ type: 'success', title: 'Answers read', message: `Read ${summary.total} answer(s) for ${studentName}. Review the matches before grading.` });
+    }
+  }, [readingUnits, sectionImages, readUnit, syncTexts, markDone, addNotification, studentName]);
 
-    addNotification({
-      type: 'success',
-      title: 'Handwriting extracted',
-      message: `Successfully read ${pageCount} page(s) for ${studentName}.`,
+  /** Replace a section's answer records after a review edit. */
+  const updateSectionRecords = React.useCallback((key, records) => {
+    setAnswerReview((prev) => {
+      if (!prev) return prev;
+      const sections = prev.sections.map(s => (s.key === key ? withStatuses({ ...s, records }) : s));
+      syncTexts(sections);
+      return { sections };
     });
-  }, [questionCount, questionTexts, subject, gradeLevel, scores, addNotification, studentName, markDone, sectionImages, sectionQuestionMap]);
+  }, [syncTexts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Teacher confirms the booklet is (or isn't) complete — affects "no response detected" vs "not found". */
+  const setSectionComplete = React.useCallback((key, complete) => {
+    setAnswerReview(prev => (prev ? { sections: prev.sections.map(s => (s.key === key ? withStatuses({ ...s, completeOverride: complete }) : s)) } : prev));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const retrySection = React.useCallback(async (key) => {
+    const current = answerReview?.sections.find(s => s.key === key);
+    if (!current) return;
+    setAnswerReview(prev => ({ sections: prev.sections.map(s => (s.key === key ? { ...s, status: 'loading', error: '' } : s)) }));
+    const next = await readUnit({ ...current, completeOverride: undefined });
+    setAnswerReview((prev) => {
+      const sections = prev.sections.map(s => (s.key === key ? next : s));
+      syncTexts(sections);
+      return { sections };
+    });
+  }, [answerReview, readUnit, syncTexts]);
 
   const handleConfirmOCR = React.useCallback(async () => {
-    // Fast path: section-based vision grading already produced scores + feedback.
-    // Apply them directly without another AI call.
-    if (visionResultsRef.current) {
-      const vr = visionResultsRef.current;
-      const newScores = [...scores];
-      const newFeedback = [...aiFeedback];
-      for (let i = 0; i < questionCount; i++) {
-        if (vr[i]) {
-          newScores[i] = { ...newScores[i], points: Math.min(vr[i].score || 0, newScores[i].maxPoints) };
-          newFeedback[i] = vr[i].feedback || '';
-        }
-      }
-      setScores(newScores);
-      setAiFeedback(newFeedback);
-      setPipelineMsg('Review scores below.');
-      setPipelineStep('done');
-      setPipelineDone(true);
-
-      const finalScore = newScores.reduce((sum, s) => sum + (s.points || 0), 0);
-      const total = newScores.reduce((sum, s) => sum + (s.maxPoints || 0), 0);
-      addNotification({
-        type: 'success',
-        title: 'Grading complete',
-        message: `Grading completed for ${studentName}. Score: ${finalScore}/${total}`,
-      });
+    const sections = answerReview?.sections || [];
+    if (!sections.length) {
+      markDone('No answers to grade. Score manually.');
       return;
     }
-
-    if (!String(fullOcrText || '').trim() && diagramIndices.size === 0) {
-      markDone('No text to grade. Score manually.');
-      return;
-    }
-
     setPipelineStep('ai');
-    setPipelineMsg('Grading answers...');
+    setPipelineMsg('Grading confirmed answers...');
+
+    // Build per-question grading input from the reviewed associations.
+    const items = [];
+    for (const sec of sections) {
+      const grading = answersForGrading(sec.questions, sec.records || [], { complete: isComplete(sec), extractionFailed: sec.status === 'error' });
+      const index = buildQuestionIndex(sec.questions);
+      grading.forEach((g, qi) => {
+        const globalIdx = sec.startIdx + qi;
+        if (globalIdx >= questionCount) return;
+        const q = sec.questions[qi] || {};
+        items.push({
+          ...g,
+          globalIdx,
+          key: `${sec.label ? `${sec.label}.` : ''}${g.number}`,
+          questionText: q.text || index[qi]?.text || `Question ${g.number}`,
+          isDiagram: q.type === 'diagram' || diagramIndices.has(globalIdx),
+          pageImage: g.pages.length ? sec.images[g.pages[0] - 1] : null,
+        });
+      });
+    }
+
+    const newScores = [...scores];
+    const newFeedback = [...aiFeedback];
+    const newTranscriptions = [...transcriptions];
+    let needsManual = 0;
+
+    const applyManual = (it, feedback, points = 0, manual = true) => {
+      const s = newScores[it.globalIdx];
+      if (!s) return;
+      newScores[it.globalIdx] = { ...s, points: Math.min(points, s.maxPoints), answerStatus: it.status, needsManual: manual, answerIds: it.answerIds };
+      newFeedback[it.globalIdx] = feedback;
+      if (manual) needsManual++;
+    };
 
     try {
-      const diagramResults = {};
-      if (diagramIndices.size > 0 && images?.length > 0) {
-        let diagramIdx = 0;
-        for (const eIdx of diagramIndices) {
-          diagramIdx++;
-          setPipelineMsg(`Grading diagram ${diagramIdx} of ${diagramIndices.size}...`);
-          try {
-            const result = await gradeDiagramWithVision(images[0], {
-              questionText: questionTexts[eIdx] || `Question ${scores[eIdx]?.question || eIdx + 1}`,
-              maxPoints: scores[eIdx]?.maxPoints || 10,
-              subject,
-            });
-            diagramResults[eIdx] = result;
-          } catch {
-            diagramResults[eIdx] = { score: 0, maxPoints: scores[eIdx]?.maxPoints || 10, feedback: 'Could not grade diagram.' };
-          }
+      for (const it of items) {
+        newTranscriptions[it.globalIdx] = it.text;
+        if (it.autoGradable) continue;
+        if (it.status === 'no_answer_detected') applyManual(it, 'No response detected in the supplied pages.', 0, false);
+        else applyManual(it, `${it.message}. Score manually.`);
+      }
+
+      const diagramItems = items.filter(it => it.autoGradable && it.isDiagram && it.pageImage);
+      let d = 0;
+      for (const it of diagramItems) {
+        d++;
+        setPipelineMsg(`Grading diagram ${d} of ${diagramItems.length}...`);
+        const max = newScores[it.globalIdx]?.maxPoints || 0;
+        try {
+          const res = await gradeDiagramWithVision(it.pageImage, { questionText: it.questionText, maxPoints: max, subject });
+          if (res.error) applyManual(it, 'AI could not grade this diagram. Score manually.');
+          else applyManual(it, res.feedback || '', res.score || 0, false);
+        } catch {
+          applyManual(it, 'AI could not grade this diagram. Score manually.');
         }
       }
 
-      const textEssayItems = scores
-        .map((s, i) => ({ ...s, essayIndex: i }))
-        .filter((_, i) => !diagramIndices.has(i));
-
-      let textResults = [];
-      if (textEssayItems.length > 0 && String(fullOcrText || '').trim()) {
-        setPipelineMsg('Grading written answers...');
-        const questionsForGrading = textEssayItems.map((s) => ({
-          questionNumber: s.question,
-          questionText: questionTexts[s.essayIndex] || `Question ${s.question}`,
-          studentAnswer: transcriptions[s.essayIndex] || '',
-          maxPoints: s.maxPoints,
-        }));
-
-        const aiResult = await gradeEssayTextWithOpenAI(questionsForGrading, {
-          subject,
-          gradeLevel,
+      const textItems = items.filter(it => it.autoGradable && !(it.isDiagram && it.pageImage));
+      if (textItems.length) {
+        setPipelineMsg(`Grading ${textItems.length} written answer${textItems.length === 1 ? '' : 's'}...`);
+        const aiResult = await gradeEssayTextWithOpenAI(textItems.map(it => ({
+          questionNumber: it.key,
+          questionText: it.questionText,
+          studentAnswer: it.text,
+          maxPoints: newScores[it.globalIdx]?.maxPoints || 0,
+        })), { subject, gradeLevel });
+        textItems.forEach((it, i) => {
+          const r = aiResult.results?.[i];
+          if (aiResult.error || !r || r.missing) applyManual(it, 'AI grading did not return a score for this answer. Score manually.');
+          else applyManual(it, r.feedback || '', r.score || 0, false);
         });
-
-        if (!aiResult.error && aiResult.results) {
-          textResults = aiResult.results;
-        }
       }
-
-      const newScores = [...scores];
-      const newFeedback = [...aiFeedback];
-      let textResultIdx = 0;
-
-      for (let i = 0; i < questionCount; i++) {
-        if (diagramIndices.has(i) && diagramResults[i]) {
-          newScores[i] = { ...newScores[i], points: Math.min(diagramResults[i].score, newScores[i].maxPoints) };
-          newFeedback[i] = diagramResults[i].feedback || '';
-        } else if (textResults[textResultIdx]) {
-          newScores[i] = { ...newScores[i], points: Math.min(textResults[textResultIdx].score || 0, newScores[i].maxPoints) };
-          newFeedback[i] = textResults[textResultIdx].feedback || '';
-          textResultIdx++;
-        }
-      }
-
-      setScores(newScores);
-      setAiFeedback(newFeedback);
-      setPipelineMsg('Review scores below.');
-
-      const finalScore = newScores.reduce((sum, s) => sum + (s.points || 0), 0);
-      const total = newScores.reduce((sum, s) => sum + (s.maxPoints || 0), 0);
-      addNotification({
-        type: 'success',
-        title: 'Grading complete',
-        message: `Grading completed for ${studentName}. Score: ${finalScore}/${total}`,
-      });
     } catch {
       setPipelineMsg('Grading failed. Score manually.');
-      addNotification({
-        type: 'error',
-        title: 'Grading failed',
-        message: `Could not grade ${studentName}. Please score manually.`,
-      });
     }
 
+    setScores(newScores);
+    setAiFeedback(newFeedback);
+    setTranscriptions(newTranscriptions);
+    setPipelineMsg(needsManual
+      ? `Graded. ${needsManual} question${needsManual === 1 ? ' needs' : 's need'} a manual score — see the flagged items.`
+      : 'Review scores below.');
     setPipelineStep('done');
     setPipelineDone(true);
-  }, [diagramIndices, images, questionTexts, scores, transcriptions, aiFeedback, subject, gradeLevel, addNotification, studentName, questionCount, markDone, setScores]);
+
+    const finalScore = newScores.reduce((sum, s) => sum + (s.points || 0), 0);
+    const total = newScores.reduce((sum, s) => sum + (s.maxPoints || 0), 0);
+    addNotification({ type: 'success', title: 'Grading complete', message: `Grading completed for ${studentName}. Score: ${finalScore}/${total}` });
+  }, [answerReview, scores, aiFeedback, transcriptions, questionCount, diagramIndices, subject, gradeLevel, setScores, markDone, addNotification, studentName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSkipAI = React.useCallback(() => {
-    setPipelineMsg('Score manually using the extracted text.');
+    setPipelineMsg('Score manually using the extracted answers.');
     setPipelineStep('done');
     setPipelineDone(true);
   }, []);
 
   const handleRetry = React.useCallback(async () => {
-    if (!images?.length) return;
     setPipelineDone(false);
-    await runOcrOnAllPages(images);
+    await runOcrOnAllPages(lastImagesRef.current || images);
   }, [images, runOcrOnAllPages]);
+
+  /** Answer records with their final associations, for saving with the scan result. */
+  const getAnswerRecordsForSave = React.useCallback(() => (answerReview?.sections || []).flatMap(sec => (sec.records || []).map((r) => {
+    const q = buildQuestionIndex(sec.questions).find(x => x.id === r.questionId);
+    return {
+      id: r.id,
+      section: sec.label,
+      rawLabel: r.rawLabel,
+      normalizedLabel: r.normalizedLabel,
+      text: r.text,
+      pages: r.pages,
+      regions: r.regions,
+      questionId: r.questionId,
+      questionNumber: q ? q.number : null,
+      matchStatus: r.matchStatus,
+      matchMethod: r.matchMethod,
+      matchConfidence: r.matchConfidence,
+      labelConfidence: r.labelConfidence,
+      handwritingConfidence: r.handwritingConfidence,
+      boundaryConfidence: r.boundaryConfidence,
+      readability: r.readability,
+      continuesFromPrevious: r.continuesFromPrevious || !!r.mergedFrom,
+      crossedOut: r.crossedOut,
+      excluded: r.excluded,
+      needsManualCorrection: r.needsManualCorrection,
+      matchReasons: r.matchReasons,
+    };
+  })), [answerReview]);
 
   return {
     transcriptions,
@@ -367,6 +327,11 @@ export default function useEssayGradingPipeline(params) {
     ocrPageProgress,
     pageTexts,
     fullOcrText,
+    answerReview,
+    updateSectionRecords,
+    setSectionComplete,
+    retrySection,
+    getAnswerRecordsForSave,
     runOcrOnAllPages,
     handleConfirmOCR,
     handleSkipAI,

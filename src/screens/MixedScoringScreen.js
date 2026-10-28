@@ -13,6 +13,7 @@ import { getAiErrorMessage } from '../utils/errors';
 import { getGradingMode } from '../components/SubjectPicker';
 import { deriveQuestionStats } from '../utils/questionUtils';
 import useEssayGradingPipeline from '../hooks/useEssayGradingPipeline';
+import AnswerMatchingReview from '../components/AnswerMatchingReview';
 
 export default function MixedScoringScreen({ navigation, route }) {
   const colors = useColors();
@@ -110,6 +111,11 @@ export default function MixedScoringScreen({ navigation, route }) {
     ocrPageProgress,
     pageTexts,
     fullOcrText,
+    answerReview,
+    updateSectionRecords,
+    setSectionComplete,
+    retrySection,
+    getAnswerRecordsForSave,
     runOcrOnAllPages,
     handleConfirmOCR,
     handleSkipAI,
@@ -276,6 +282,7 @@ export default function MixedScoringScreen({ navigation, route }) {
       gradingType: 'mixed',
       mcqResults: result.mcqResults,
       essayResults: result.essayResults,
+      answerRecords: getAnswerRecordsForSave(),
     });
   };
 
@@ -320,68 +327,22 @@ export default function MixedScoringScreen({ navigation, route }) {
   if (pipelineStep === 'review') {
     return (
       <View style={styles.container}>
-        <Header title="Review Extracted Text" onBack={() => navigation.goBack()} />
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+        <Header title="Review Answer Matches" onBack={() => navigation.goBack()} />
+        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <AnimatedScreen>
-            <Text style={styles.sectionTitle}>Extracted Text</Text>
+            <Text style={styles.sectionTitle}>Check the written answers</Text>
             <Text style={[typography.bodySmall, { color: colors.textSecondary, marginBottom: 16 }]}>
-              Below is the text extracted from {images?.length || 1} scanned page(s). Review it before proceeding.
+              Each question is shown with the handwritten answer matched to it. Confirm or correct matches before grading.
             </Text>
-
-            {/* Scanned page thumbnails */}
-            {images?.length > 0 && (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-                {images.map((uri, idx) => (
-                  <View key={idx} style={styles.pageThumbnailWrap}>
-                    <Image source={{ uri }} style={styles.pageThumbnail} resizeMode="cover" />
-                    <Text style={styles.pageThumbnailLabel}>Page {idx + 1}</Text>
-                    {pageTexts[idx]?.trim() ? (
-                      <Ionicons name="checkmark-circle" size={16} color={colors.success} style={{ position: 'absolute', top: 4, right: 4 }} />
-                    ) : (
-                      <Ionicons name="close-circle" size={16} color={colors.error} style={{ position: 'absolute', top: 4, right: 4 }} />
-                    )}
-                  </View>
-                ))}
-              </ScrollView>
-            )}
-
-            {/* Full combined OCR text */}
-            <Card style={styles.ocrCard}>
-              <View style={styles.ocrCardHeader}>
-                <Ionicons name="reader-outline" size={18} color={colors.accent} />
-                <Text style={styles.ocrCardLabel}>Full Extracted Text</Text>
-              </View>
-              <View style={styles.ocrTextBox}>
-                <Text style={styles.ocrText} selectable>{fullOcrText || '(no text extracted)'}</Text>
-              </View>
-            </Card>
-
-            {/* Per-question breakdown */}
-            {essayCount > 1 && transcriptions.some(t => String(t || '').trim()) && (
-              <View style={{ marginTop: 8 }}>
-                <Text style={[typography.h4, { color: colors.text, marginBottom: 8 }]}>Per Question</Text>
-                {transcriptions.map((text, i) => (
-                  <Card key={i} style={styles.ocrCard}>
-                    <View style={styles.ocrCardHeader}>
-                      <Ionicons name="help-circle-outline" size={18} color={colors.secondary} />
-                      <Text style={styles.ocrCardLabel}>
-                        {questionTexts[i] ? `Q${mcqCount + i + 1}: ${questionTexts[i]}` : `Question ${mcqCount + i + 1}`}
-                      </Text>
-                    </View>
-                    <View style={styles.ocrTextBox}>
-                      <Text style={styles.ocrText} selectable>{text || '(no text detected for this question)'}</Text>
-                    </View>
-                  </Card>
-                ))}
-              </View>
-            )}
-          </AnimatedScreen>
-
-          <AnimatedScreen delay={60}>
-            <View style={{ gap: 10, marginTop: 16 }}>
-              <Button title="Continue to Grading" onPress={handleConfirmOCR} variant="primary" />
-              <Button title="Score Manually" onPress={handleSkipEssayAI} variant="outline" />
-            </View>
+            <AnswerMatchingReview
+              sections={answerReview?.sections || []}
+              onRecordsChange={updateSectionRecords}
+              onSetComplete={setSectionComplete}
+              onRetrySection={retrySection}
+              onContinue={handleConfirmOCR}
+              onScoreManually={handleSkipEssayAI}
+              onRescanAll={handleRetry}
+            />
           </AnimatedScreen>
         </ScrollView>
       </View>

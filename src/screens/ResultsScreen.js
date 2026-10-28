@@ -16,7 +16,7 @@ import { getActionErrorMessage, logError } from '../utils/errors';
 export default function ResultsScreen({ navigation, route }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const { studentName, studentNumber, score, percentage, testData, images, gradingResults, gradingType, isDirectFlow } = route.params || {};
+  const { studentName, studentNumber, score, percentage, testData, images, gradingResults, gradingType, isDirectFlow, answerRecords } = route.params || {};
   const [currentView, setCurrentView] = useState('individual'); // 'individual' or 'list'
   const { scans, addScan } = useScans();
   const { showToast } = useToast();
@@ -203,6 +203,7 @@ export default function ResultsScreen({ navigation, route }) {
         testId,
         gradingResults: gradingResults || [],
         gradingType: gradingType || null,
+        ...(Array.isArray(answerRecords) && answerRecords.length ? { answerRecords } : null),
       }).then((res) => {
         if (res?.syncError) showToast("Saved on this device only. Couldn't sync to your account.", 'warning');
       });

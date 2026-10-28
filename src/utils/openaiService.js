@@ -3,6 +3,8 @@ import * as FileSystem from 'expo-file-system';
 import Constants from 'expo-constants';
 import secureStorage from './secureStorage';
 import { rateLimit } from './security';
+import { runPaperExtraction } from './paperExtraction';
+import { runAnswerExtraction } from './answerExtraction';
 
 const KEY_STORAGE = 'openai_api_key';
 
@@ -711,9 +713,9 @@ IMPORTANT:
 - For comprehension/passage-based questions: the question text may include "PASSAGE: ..." followed by "QUESTION: ...". Use the passage as the primary reference; the answer should demonstrate understanding of that specific passage.
 
 Respond with ONLY a JSON object in this exact format:
-{"results": [{"questionNumber": 1, "questionType": "essay", "score": 8, "maxPoints": 10, "feedback": "Brief 1-2 sentence feedback explaining the score"}]}
+{"results": [{"questionNumber": "${questions[0]?.questionNumber ?? 1}", "questionType": "essay", "score": 8, "maxPoints": 10, "feedback": "Brief 1-2 sentence feedback explaining the score"}]}
 
-The "results" array must have exactly ${questions.length} element(s).
+The "results" array must have exactly ${questions.length} element(s), and each "questionNumber" must be copied exactly from the "--- Question X" heading above.
 Do not include any explanation outside the JSON.`;
 
   const { response, error } = await queryOpenAIText(prompt, {
@@ -739,10 +741,12 @@ Do not include any explanation outside the JSON.`;
 
     const parsed = JSON.parse(jsonMatch[0]);
     const rawResults = parsed.results || [];
+    const aligned = alignResultsByNumber(rawResults, questions.map((q, i) => q.questionNumber ?? i + 1));
 
     const results = questions.map((q, i) => {
-      const r = rawResults[i] || {};
-      const score = Math.min(Math.max(parseInt(r.score, 10) || 0, 0), q.maxPoints);
+      const r = aligned[i];
+      if (!r) return { score: 0, maxPoints: q.maxPoints, questionType: '', feedback: '', missing: true };
+      const score = Math.min(Math.max(parseFloat(r.score) || 0, 0), q.maxPoints);
       return {
         score,
         maxPoints: q.maxPoints,
@@ -761,160 +765,132 @@ Do not include any explanation outside the JSON.`;
 }
 
 /**
- * Extract questions from a photographed question paper using GPT-4o Vision.
- * Supports multiple page images. Returns structured question data.
- * 
+ * Send several page images + prompt in ONE request, in order, so the model can follow
+ * questions that continue across pages. Uses JSON mode and reports truncated output.
+ * @returns {Promise<{ response: string, truncated?: boolean, error?: string }>}
+ */
+async function queryOpenAIVisionPages(imageUris, prompt, options = {}) {
+  const { timeoutMs = 120000, maxTokens = 8192, maxWidth = 1536 } = options;
+
+  if (!rateLimit('openai_vision', 30)) {
+    return { response: '', error: 'Too many requests. Please wait a moment.' };
+  }
+
+  const key = await getOpenAIKey();
+  if (!key) return { response: '', error: 'No API key configured. Go to Settings to add it.' };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const dataUrls = [];
+    for (const uri of imageUris) dataUrls.push(await imageToBase64DataUrl(uri, maxWidth));
+
+    const modelConfig = getModelConfig({ useFullModel: true });
+    const res = await fetch(`${modelConfig.url}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: modelConfig.model,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an educational technology assistant used by teachers. You transcribe printed exam question papers into structured JSON, preserving the exact question hierarchy, numbering, text and marks. You never invent content that is not on the page.',
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              ...dataUrls.map((url) => ({ type: 'image_url', image_url: { url, detail: 'high' } })),
+            ],
+          },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0,
+        response_format: { type: 'json_object' },
+      }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      return { response: '', error: `API error ${res.status}: ${text}` };
+    }
+    const data = await res.json();
+    const choice = data.choices?.[0];
+    return { response: choice?.message?.content || '', truncated: choice?.finish_reason === 'length' };
+  } catch (e) {
+    return {
+      response: '',
+      error: e.name === 'AbortError' ? 'AI request timed out.' : `AI error: ${e.message}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Extract the question hierarchy from a photographed question paper using GPT-4o Vision.
+ * Pages are sent together (in batches) in upload order; see utils/paperExtraction.js.
+ *
  * @param {string[]} imageUris - Array of local image URIs (one per page)
  * @param {object} [options]
  * @param {string} [options.subject] - Subject hint
- * @param {string[]} [options.sectionTypes] - e.g. ['mcq','fill_in_blank','short_notes','comprehension','essay','diagram']
- * @returns {Promise<{ questions: Array<{ number, text, type, section, maxPoints? }>, sections: Array<{ label, type, questionRange }>, error?: string }>}
+ * @param {Array<{label: string, type: string}>} [options.sectionMapping] - The section these pages belong to
+ * @param {(p: {pages: number[], total: number}) => void} [options.onProgress]
+ * @returns {Promise<{ status: 'success'|'partial'|'error', tree: object[], questions: object[], counts: object, issues: object[], staticIssues: object[], sections: [], error?: string }>}
+ *   `questions` is the flat list of assessable items (leaf subquestions) used by grading.
  */
 export async function extractQuestionsFromPaperImage(imageUris, options = {}) {
-  const { subject = '', sectionTypes = [], sectionMapping = [] } = options;
+  const { subject = '', sectionTypes = [], sectionMapping = [], onProgress } = options;
+  const uris = Array.isArray(imageUris) ? imageUris.filter(Boolean) : [];
+  const section = sectionMapping[0] || {};
 
-  const subjectHint = subject ? ` for a ${subject} exam` : '';
-  let sectionHint = '';
-  if (sectionMapping && sectionMapping.length > 0) {
-    const mappingDesc = sectionMapping.map(s => `Section ${s.label} = ${s.type}`).join(', ');
-    sectionHint = `\nThe teacher specified the paper structure: ${mappingDesc}.`;
-  } else if (sectionTypes.length > 0) {
-    sectionHint = `\nThe teacher indicated these section types are present: ${sectionTypes.join(', ')}.`;
-  }
-
-  const prompt = `You are analyzing a photographed question paper${subjectHint}.
-${sectionHint}
-
-Extract ALL questions from this question paper. For each question, identify:
-1. The question number (use sub-numbering like 1.1, 1.2 if the paper uses it)
-2. The full question text (copy it exactly as written)
-3. The question type: one of "mcq", "fill_in_blank", "short_notes", "comprehension", "essay", "diagram", or "calculation"
-4. Which section it belongs to (e.g., "Section A", "Section B", etc.)
-5. Maximum marks/points if shown
-
-CRITICAL — Comprehension & passage-based questions:
-- If a section has a reading passage, extract, poem, story, case study, or any shared text that sub-questions refer to, you MUST include that full passage/text in EVERY sub-question's "text" field as context.
-- Format: "PASSAGE: [full passage text here]\\n\\nQUESTION: [the actual sub-question]"
-- This applies to comprehension sections, reading exercises, case studies, source-based questions, data interpretation, etc.
-- Do NOT extract only the sub-question without its passage — the passage IS part of the question.
-
-Also identify the sections/parts of the paper.
-
-Respond with ONLY a JSON object in this exact format:
-{
-  "sections": [
-    {"label": "Section A", "type": "mcq", "questionRange": "1-10"},
-    {"label": "Section B", "type": "comprehension", "questionRange": "11-15"}
-  ],
-  "questions": [
-    {"number": 1, "text": "What is the capital of France?", "type": "mcq", "section": "Section A", "maxPoints": 2, "options": ["A) Paris", "B) London", "C) Berlin", "D) Madrid"]},
-    {"number": 11, "text": "PASSAGE: The sun is the largest star in our solar system. It provides light and heat...\\n\\nQUESTION: What role does the sun play according to the passage?", "type": "comprehension", "section": "Section B", "maxPoints": 5}
-  ]
+  const result = await runPaperExtraction({
+    pageCount: uris.length,
+    subject,
+    sectionLabel: section.label || '',
+    sectionType: section.type || sectionTypes[0] || '',
+    onProgress,
+    callVision: (pageIndexes, prompt) => queryOpenAIVisionPages(pageIndexes.map(i => uris[i]), prompt),
+  });
+  return { ...result, sections: [] };
 }
 
-For MCQ questions, include the "options" array. For other types, omit it.
-If marks are not shown, estimate based on question complexity.
-Do not include any explanation outside the JSON.`;
-
-  // Process all pages — send them as separate images in one request if possible,
-  // otherwise process page by page and merge
-  if (imageUris.length === 1) {
-    try {
-      const { response, error } = await queryOpenAIVision(imageUris[0], prompt, {
-        maxTokens: 4096,
-        timeoutMs: 60000,
-      });
-
-      if (error) return { questions: [], sections: [], error };
-      if (!response || response.trim().length === 0) {
-        return { questions: [], sections: [], error: 'AI returned an empty response. Try a clearer photo.' };
-      }
-      return parseQuestionExtractionResponse(response);
-    } catch (e) {
-      return { questions: [], sections: [], error: `Failed to process image: ${e.message}` };
-    }
-  }
-
-  // Multiple pages: process each page, then merge
-  const allQuestions = [];
-  const allSections = [];
-  const seenSections = new Set();
-  const errors = [];
-
-  for (let i = 0; i < imageUris.length; i++) {
-    try {
-      const pagePrompt = `${prompt}\n\nThis is page ${i + 1} of ${imageUris.length}. Extract only the questions visible on THIS page.`;
-      const { response, error } = await queryOpenAIVision(imageUris[i], pagePrompt, {
-        maxTokens: 4096,
-        timeoutMs: 60000,
-      });
-
-      if (error) {
-        errors.push(`Page ${i + 1}: ${error}`);
-        continue;
-      }
-
-      if (!response || response.trim().length === 0) {
-        errors.push(`Page ${i + 1}: Empty AI response`);
-        continue;
-      }
-
-      const parsed = parseQuestionExtractionResponse(response);
-      if (parsed.error) {
-        errors.push(`Page ${i + 1}: ${parsed.error}`);
-        continue;
-      }
-
-      for (const q of parsed.questions) {
-        if (!allQuestions.some(existing => existing.number === q.number)) {
-          allQuestions.push(q);
-        }
-      }
-      for (const s of parsed.sections) {
-        if (!seenSections.has(s.label)) {
-          seenSections.add(s.label);
-          allSections.push(s);
-        }
-      }
-    } catch (e) {
-      errors.push(`Page ${i + 1}: ${e.message}`);
-      continue;
-    }
-  }
-
-  if (allQuestions.length === 0) {
-    const detail = errors.length > 0 ? errors[0] : 'Unknown error';
-    return { questions: [], sections: [], error: `Could not extract questions. ${detail}` };
-  }
-
-  allQuestions.sort((a, b) => a.number - b.number);
-  return { questions: allQuestions, sections: allSections };
+/**
+ * Read a student's handwritten answer booklet pages and build answer records matched to the
+ * Stage 1 question hierarchy. Transcription only — grading happens after teacher review.
+ * See utils/answerExtraction.js and utils/answerMatching.js.
+ *
+ * @param {string[]} imageUris - Answer page URIs in booklet order
+ * @param {Array} questions - The section's assessable questions (sectionData[i].questions)
+ * @param {object} [options] - { subject, sectionLabel, expectedPages, onProgress }
+ */
+export async function extractStudentAnswers(imageUris, questions, options = {}) {
+  const uris = Array.isArray(imageUris) ? imageUris.filter(Boolean) : [];
+  return runAnswerExtraction({
+    pageCount: uris.length,
+    questions: Array.isArray(questions) ? questions : [],
+    subject: options.subject || '',
+    sectionLabel: options.sectionLabel || '',
+    expectedPages: options.expectedPages || null,
+    onProgress: options.onProgress,
+    callVision: (pageIndexes, prompt) => queryOpenAIVisionPages(pageIndexes.map(i => uris[i]), prompt),
+  });
 }
 
-function parseQuestionExtractionResponse(response) {
-  try {
-    const jsonMatch = response.match(/\{[\s\S]*"questions"[\s\S]*\}/);
-    if (!jsonMatch) {
-      return { questions: [], sections: [], error: 'AI response did not contain valid JSON.' };
-    }
-    const parsed = JSON.parse(jsonMatch[0]);
-    const questions = (parsed.questions || []).map(q => ({
-      number: q.number || 0,
-      text: q.text || '',
-      type: q.type || 'short_notes',
-      section: q.section || '',
-      maxPoints: q.maxPoints || 0,
-      options: q.options || undefined,
-    }));
-    const sections = (parsed.sections || []).map(s => ({
-      label: s.label || '',
-      type: s.type || '',
-      questionRange: s.questionRange || '',
-    }));
-    return { questions, sections };
-  } catch (e) {
-    return { questions: [], sections: [], error: `Failed to parse: ${e.message}` };
-  }
+/**
+ * Pick the model's result for each question by its number, falling back to position only when
+ * the model returned no usable numbers. Prevents one omitted result from shifting every score.
+ */
+function alignResultsByNumber(rawResults, numbers) {
+  const used = new Set();
+  return numbers.map((num, i) => {
+    const idx = rawResults.findIndex((r, k) => !used.has(k) && r && String(r.questionNumber ?? '').trim().toLowerCase() === String(num ?? '').trim().toLowerCase());
+    if (idx >= 0) { used.add(idx); return rawResults[idx]; }
+    const anyNumbered = rawResults.some(r => r && r.questionNumber !== undefined && r.questionNumber !== null);
+    if (!anyNumbered && rawResults.length === numbers.length) return rawResults[i];
+    return null;
+  });
 }
 
 /**
@@ -1134,9 +1110,10 @@ Do not include any explanation outside the JSON.`;
 
     const parsed = JSON.parse(jsonMatch[0]);
     const rawResults = parsed.results || [];
+    const aligned = alignResultsByNumber(rawResults, qs.map((q, i) => q.number || i + 1));
 
     const results = qs.map((q, i) => {
-      const r = rawResults[i] || {};
+      const r = aligned[i] || {};
       const maxPoints = q.maxPoints || 0;
       const score = Math.min(Math.max(parseInt(r.score, 10) || 0, 0), maxPoints || Infinity);
       return {

@@ -11,6 +11,7 @@ import { gradeEssay } from '../utils/grading';
 import { getOpenAIKey } from '../utils/openaiService';
 import { splitTranscriptionByQuestions as sharedSplitTranscriptionByQuestions } from '../utils/questionUtils';
 import useEssayGradingPipeline from '../hooks/useEssayGradingPipeline';
+import AnswerMatchingReview from '../components/AnswerMatchingReview';
 import { getGradingMode } from '../components/SubjectPicker';
 
 /**
@@ -76,6 +77,9 @@ export default function EssayScoringScreen({ navigation, route }) {
     return testData?.questionTexts || [];
   }, [testData?.extractedQuestions, testData?.questionTexts]);
 
+  // Printed labels ("3A", "2(a)(i)") for display; falls back to position.
+  const questionLabel = (i) => testData?.extractedQuestions?.[i]?.number ?? i + 1;
+
   // Pipeline state: 'idle' → 'ocr' → 'review' → 'ai' → 'done'
   const {
     transcriptions,
@@ -86,6 +90,11 @@ export default function EssayScoringScreen({ navigation, route }) {
     ocrPageProgress,
     pageTexts,
     fullOcrText,
+    answerReview,
+    updateSectionRecords,
+    setSectionComplete,
+    retrySection,
+    getAnswerRecordsForSave,
     runOcrOnAllPages,
     handleConfirmOCR,
     handleSkipAI,
@@ -97,6 +106,7 @@ export default function EssayScoringScreen({ navigation, route }) {
     sectionData: testData?.sectionData || [],
     questionCount,
     questionTexts,
+    questions: testData?.extractedQuestions || null,
     scores,
     setScores,
     subject: testData?.subject || '',
@@ -104,9 +114,10 @@ export default function EssayScoringScreen({ navigation, route }) {
     diagramIndices: React.useMemo(() => {
       const extractedQuestions = testData?.extractedQuestions || [];
       const indices = new Set();
-      extractedQuestions.forEach((q) => {
+      // Use list position: question numbers can be labels like "3A" and need not start at 1.
+      extractedQuestions.forEach((q, i) => {
         if (q.type === 'diagram') {
-          indices.add((q.number || 1) - 1);
+          indices.add(i);
         }
       });
       return indices;
@@ -135,6 +146,7 @@ export default function EssayScoringScreen({ navigation, route }) {
       next[qIndex] = {
         ...next[qIndex],
         points: isNaN(num) ? 0 : Math.min(Math.max(num, 0), max),
+        needsManual: false,
       };
       return next;
     });
@@ -143,7 +155,7 @@ export default function EssayScoringScreen({ navigation, route }) {
   const handleQuickScore = (qIndex, pts) => {
     setScores((prev) => {
       const next = [...prev];
-      next[qIndex] = { ...next[qIndex], points: pts };
+      next[qIndex] = { ...next[qIndex], points: pts, needsManual: false };
       return next;
     });
   };
@@ -152,7 +164,7 @@ export default function EssayScoringScreen({ navigation, route }) {
   const maxScore = scores.reduce((sum, s) => sum + s.maxPoints, 0);
   const pct = maxScore > 0 ? Math.round((currentScore / maxScore) * 100) : 0;
 
-  const handleGrade = () => {
+  const finishGrading = () => {
     const result = gradeEssay(scores);
     navigation.navigate('Results', {
       images,
@@ -163,7 +175,18 @@ export default function EssayScoringScreen({ navigation, route }) {
       percentage: result.percentage,
       gradingResults: result.results,
       gradingType: 'essay',
+      answerRecords: getAnswerRecordsForSave(),
     });
+  };
+
+  const handleGrade = () => {
+    const manual = scores.filter(s => s.needsManual).length;
+    if (!manual) { finishGrading(); return; }
+    Alert.alert(
+      'Some questions need a manual score',
+      `${manual} question${manual === 1 ? '' : 's'} could not be graded automatically (unreadable, unmatched or missing pages). Their current scores will be saved as entered.`,
+      [{ text: 'Go back', style: 'cancel' }, { text: 'Finish anyway', onPress: finishGrading }],
+    );
   };
 
   // Full-screen scanning state (OCR running or grading)
@@ -203,72 +226,22 @@ export default function EssayScoringScreen({ navigation, route }) {
   if (pipelineStep === 'review') {
     return (
       <View style={styles.container}>
-        <Header title="Review Extracted Text" onBack={() => navigation.goBack()} />
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+        <Header title="Review Answer Matches" onBack={() => navigation.goBack()} />
+        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <AnimatedScreen>
-            <Text style={styles.title}>Extracted Text</Text>
+            <Text style={styles.title}>Check the answers</Text>
             <Text style={[typography.bodySmall, { color: colors.textSecondary, marginBottom: 16 }]}>
-              Below is the text extracted from {images?.length || 1} scanned page(s). Review it before proceeding.
+              Each question is shown with the handwritten answer matched to it. Confirm or correct matches before grading.
             </Text>
-
-            {/* Scanned page thumbnails */}
-            {images?.length > 0 && (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-                {images.map((uri, idx) => (
-                  <View key={idx} style={styles.pageThumbnailWrap}>
-                    <Image source={{ uri }} style={styles.pageThumbnail} resizeMode="cover" />
-                    <Text style={styles.pageThumbnailLabel}>Page {idx + 1}</Text>
-                    {pageTexts[idx]?.trim() ? (
-                      <Ionicons name="checkmark-circle" size={16} color={colors.success} style={{ position: 'absolute', top: 4, right: 4 }} />
-                    ) : (
-                      <Ionicons name="close-circle" size={16} color={colors.error} style={{ position: 'absolute', top: 4, right: 4 }} />
-                    )}
-                  </View>
-                ))}
-              </ScrollView>
-            )}
-
-            {/* Full combined OCR text */}
-            <Card style={styles.ocrCard}>
-              <View style={styles.ocrCardHeader}>
-                <Ionicons name="reader-outline" size={18} color={colors.accent} />
-                <Text style={styles.ocrCardLabel}>Full Extracted Text</Text>
-              </View>
-              <View style={styles.ocrTextBox}>
-                <Text style={styles.ocrText} selectable>{fullOcrText || '(no text extracted)'}</Text>
-              </View>
-            </Card>
-
-            {/* Per-question breakdown */}
-            {questionCount > 1 && transcriptions.some(t => t.trim()) && (
-              <View style={{ marginTop: 8 }}>
-                <Text style={[typography.h4, { color: colors.text, marginBottom: 8 }]}>Per Question</Text>
-                {transcriptions.map((text, i) => (
-                  <Card key={i} style={styles.ocrCard}>
-                    <View style={styles.ocrCardHeader}>
-                      <Ionicons name="help-circle-outline" size={18} color={colors.secondary} />
-                      <Text style={styles.ocrCardLabel}>
-                        {questionTexts[i] ? `Q${i + 1}: ${questionTexts[i]}` : `Question ${i + 1}`}
-                      </Text>
-                    </View>
-                    <View style={styles.ocrTextBox}>
-                      <Text style={styles.ocrText} selectable>{text || '(no text detected for this question)'}</Text>
-                    </View>
-                  </Card>
-                ))}
-              </View>
-            )}
-          </AnimatedScreen>
-
-          <AnimatedScreen delay={60}>
-            <View style={{ gap: 10, marginTop: 16 }}>
-              <Button title="Continue to Grading" onPress={handleConfirmOCR} variant="primary" />
-              <Button title="Score Manually" onPress={handleSkipAI} variant="outline" />
-              <TouchableOpacity style={styles.retryBtn} onPress={handleRetry}>
-                <Ionicons name="refresh" size={18} color="#fff" />
-                <Text style={styles.retryBtnText}>Re-scan All Pages</Text>
-              </TouchableOpacity>
-            </View>
+            <AnswerMatchingReview
+              sections={answerReview?.sections || []}
+              onRecordsChange={updateSectionRecords}
+              onSetComplete={setSectionComplete}
+              onRetrySection={retrySection}
+              onContinue={handleConfirmOCR}
+              onScoreManually={handleSkipAI}
+              onRescanAll={handleRetry}
+            />
           </AnimatedScreen>
         </ScrollView>
       </View>
@@ -375,9 +348,17 @@ export default function EssayScoringScreen({ navigation, route }) {
           {scores.map((item, qIndex) => (
             <Card key={qIndex} style={styles.questionCard}>
               <View style={styles.questionHeader}>
-                <Text style={styles.questionLabel}>Question {item.question}</Text>
+                <Text style={styles.questionLabel}>Question {questionLabel(qIndex)}</Text>
                 <Text style={styles.maxLabel}>Max: {item.maxPoints}</Text>
               </View>
+              {item.needsManual ? (
+                <View style={[styles.statusBanner, { backgroundColor: colors.warning + '15', marginBottom: 8 }]}>
+                  <Ionicons name="alert-circle" size={16} color={colors.warning} />
+                  <Text style={[styles.statusText, { color: colors.warning }]}>{aiFeedback[qIndex] || 'Needs a manual score.'}</Text>
+                </View>
+              ) : item.answerStatus === 'no_answer_detected' ? (
+                <Text style={[typography.caption, { color: colors.textSecondary, marginBottom: 6 }]}>No response detected in the supplied pages.</Text>
+              ) : null}
 
               <View style={styles.scoringRow}>
                 <View style={styles.quickButtons}>

@@ -7,6 +7,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "test": "node --test \"tests/**/*.test.mjs\"",
     "build:apk": "eas build -p android --profile preview",
     "eas:open": "eas build:list --limit 1 --json | node -e \"(async()=>{const fs=require('fs');const l=JSON.parse(fs.readFileSync(0,'utf8'))[0];if(!l){console.error('No builds yet');process.exit(1)}console.log(l.platform==='android'?l.artifacts?.buildUrl||l.webhookUrl:l.artifacts?.buildUrl||l.webhookUrl)})()\""
   },

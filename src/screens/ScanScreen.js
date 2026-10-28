@@ -131,6 +131,7 @@ export default function ScanScreen({ navigation, route }) {
           label: sections[i].label,
           type: sections[i].type,
           images: imgs,
+          expectedPages: sectionPageCounts[i] || null,
         });
         flatImages.push(...imgs);
       }

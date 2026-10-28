@@ -43,6 +43,8 @@ export function gradeEssay(scores) {
     points: s.points,
     maxPoints: s.maxPoints,
     status: s.points >= s.maxPoints ? 'correct' : s.points > 0 ? 'partial' : 'incorrect',
+    ...(s.answerStatus ? { answerStatus: s.answerStatus } : null),
+    ...(s.needsManual ? { needsManual: true } : null),
   }));
   const score = results.reduce((sum, r) => sum + r.points, 0);
   const total = results.reduce((sum, r) => sum + r.maxPoints, 0);

@@ -172,7 +172,9 @@ export default function ReviewTestScreen({ navigation, route }) {
                     <Text style={styles.detailLabel}>Section {sec.label}</Text>
                     <Text style={styles.detailValue}>
                       {sec.type === 'mcq' ? 'MCQs' : sec.type === 'fill_in_blank' ? 'Fill in Blanks' : sec.type === 'short_notes' ? 'Short Notes' : sec.type === 'comprehension' ? 'Comprehension' : sec.type === 'essay' ? 'Essay' : sec.type === 'diagram' ? 'Diagrams' : sec.type === 'calculation' ? 'Calculations' : sec.type}
-                      {' — '}{sec.questions?.length || 0} question{(sec.questions?.length || 0) !== 1 ? 's' : ''}
+                      {sec.questionCounts
+                        ? ` — ${sec.questionCounts.topLevel} question${sec.questionCounts.topLevel !== 1 ? 's' : ''}, ${sec.questionCounts.assessable} gradable item${sec.questionCounts.assessable !== 1 ? 's' : ''}, ${sec.questionCounts.totalMarks} marks`
+                        : ` — ${sec.questions?.length || 0} question${(sec.questions?.length || 0) !== 1 ? 's' : ''}`}
                     </Text>
                   </View>
                 </View>
@@ -187,7 +189,7 @@ export default function ReviewTestScreen({ navigation, route }) {
                   <View style={{ marginLeft: 52 }}>
                     {sec.questions.slice(0, 3).map((q, qi) => (
                       <Text key={qi} style={[typography.caption, { color: colors.textSecondary, marginBottom: 2 }]} numberOfLines={1}>
-                        Q{q.number}: {q.text}
+                        Q{q.number}: {q.ownText || q.text}
                       </Text>
                     ))}
                     {sec.questions.length > 3 && (

@@ -12,8 +12,33 @@ import { useColors } from '../context/ThemeContext';
 import { typography } from '../theme/typography';
 import Input from '../components/Input';
 import { extractQuestionsFromPaperImage, getOpenAIKey } from '../utils/openaiService';
+import { summarizeQuestionTree } from '../utils/paperExtraction';
 import { getAiErrorMessage } from '../utils/errors';
 import { useAuth } from '../context/AuthContext';
+import QuestionReviewEditor from '../components/QuestionReviewEditor';
+
+// Extraction lifecycle per section: idle -> loading -> success | partial | error.
+// Uploaded images are never cleared by extraction, so failures can be retried.
+const RESET_EXTRACTION = {
+  extracting: false,
+  extractionDone: false,
+  extractionStatus: 'idle',
+  extractionError: '',
+  extractionMsg: '',
+  questions: [],
+  questionTree: [],
+  questionCounts: null,
+  extractionIssues: [],
+  staticIssues: [],
+  instructions: [],
+  paperTotalMarks: null,
+  reviewConfirmed: false,
+};
+
+function extractionSummary(counts) {
+  const parts = counts.subquestions > 0 ? `, ${counts.subquestions} sub-part${counts.subquestions === 1 ? '' : 's'}` : '';
+  return `Found ${counts.topLevel} question${counts.topLevel === 1 ? '' : 's'}${parts} — ${counts.assessable} gradable item${counts.assessable === 1 ? '' : 's'}, ${counts.totalMarks} marks.`;
+}
 
 const ALL_SECTION_TYPES = [
   { key: 'mcq', label: 'MCQs', icon: 'radio-button-on' },
@@ -63,10 +88,7 @@ export default function QuestionTypeScreen({ navigation, route }) {
       label: nextLabel,
       type: '',
       images: [],
-      extracting: false,
-      extractionDone: false,
-      extractionMsg: '',
-      questions: [],
+      ...RESET_EXTRACTION,
       markingKey: '',
       mcqOptions: 4,
       mcqQuestionCount: '',
@@ -107,7 +129,7 @@ export default function QuestionTypeScreen({ navigation, route }) {
       const result = await ImagePicker.launchCameraAsync({ quality: 0.8, allowsEditing: false });
       if (!result.canceled && result.assets?.[0]) {
         setSections(prev => prev.map((s, i) => i === sIdx
-          ? { ...s, images: [...s.images, result.assets[0].uri], extractionDone: false, questions: [], extractionMsg: '' }
+          ? { ...s, images: [...s.images, result.assets[0].uri], ...RESET_EXTRACTION }
           : s
         ));
       }
@@ -119,7 +141,7 @@ export default function QuestionTypeScreen({ navigation, route }) {
       const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.8 });
       if (!result.canceled && result.assets?.length > 0) {
         setSections(prev => prev.map((s, i) => i === sIdx
-          ? { ...s, images: [...s.images, ...result.assets.map(a => a.uri)], extractionDone: false, questions: [], extractionMsg: '' }
+          ? { ...s, images: [...s.images, ...result.assets.map(a => a.uri)], ...RESET_EXTRACTION }
           : s
         ));
       }
@@ -128,7 +150,7 @@ export default function QuestionTypeScreen({ navigation, route }) {
 
   const removeSectionImage = (sIdx, imgIdx) => {
     setSections(prev => prev.map((s, i) => i === sIdx
-      ? { ...s, images: s.images.filter((_, j) => j !== imgIdx), extractionDone: false, questions: [], extractionMsg: '' }
+      ? { ...s, images: s.images.filter((_, j) => j !== imgIdx), ...RESET_EXTRACTION }
       : s
     ));
   };
@@ -143,32 +165,84 @@ export default function QuestionTypeScreen({ navigation, route }) {
     const key = await getOpenAIKey();
     if (!key) { showToast('API key not set. Go to Settings to add it.', 'error'); return; }
 
-    updateSection(sIdx, { extracting: true, extractionMsg: `Reading Section ${section.label} (${section.images.length} page${section.images.length > 1 ? 's' : ''})...` });
+    const pageCount = section.images.length;
+    updateSection(sIdx, {
+      ...RESET_EXTRACTION,
+      extracting: true,
+      extractionStatus: 'loading',
+      extractionMsg: `Reading Section ${section.label} (${pageCount} page${pageCount > 1 ? 's' : ''})...`,
+    });
 
     try {
       const result = await extractQuestionsFromPaperImage(section.images, {
         subject: testData?.subject || '',
         sectionTypes: [section.type],
         sectionMapping: [{ label: section.label, type: section.type }],
+        onProgress: ({ pages, total }) => {
+          if (total > pages.length) {
+            updateSection(sIdx, { extractionMsg: `Reading page${pages.length > 1 ? 's' : ''} ${pages[0]}${pages.length > 1 ? `–${pages[pages.length - 1]}` : ''} of ${total}...` });
+          }
+        },
       });
 
-      if (result.error) {
-        updateSection(sIdx, { extracting: false, extractionDone: true, extractionMsg: `Couldn't extract questions. ${getAiErrorMessage(result.error)}` });
+      if (result.status === 'error') {
+        updateSection(sIdx, { ...RESET_EXTRACTION, extractionStatus: 'error', extractionError: getAiErrorMessage(result.error) });
         showToast(`Section ${section.label}: Could not extract questions`, 'error');
-      } else {
-        updateSection(sIdx, {
-          extracting: false,
-          extractionDone: true,
-          questions: result.questions,
-          extractionMsg: `Found ${result.questions.length} questions.`,
-        });
-        showToast(`Section ${section.label}: Extracted ${result.questions.length} questions`, 'success');
+        return;
       }
-    } catch {
-      updateSection(sIdx, { extracting: false, extractionDone: true, extractionMsg: 'Extraction failed. Try again.' });
+      updateSection(sIdx, {
+        ...RESET_EXTRACTION,
+        extractionDone: true,
+        extractionStatus: result.status,
+        extractionMsg: extractionSummary(result.counts),
+        questions: result.questions,
+        questionTree: result.tree,
+        questionCounts: result.counts,
+        extractionIssues: result.issues,
+        staticIssues: result.staticIssues,
+        instructions: result.instructions,
+        paperTotalMarks: result.paperTotalMarks,
+      });
+      showToast(
+        result.status === 'partial'
+          ? `Section ${section.label}: Some items need checking`
+          : `Section ${section.label}: ${result.counts.topLevel} question${result.counts.topLevel === 1 ? '' : 's'} extracted`,
+        result.status === 'partial' ? 'info' : 'success',
+      );
+    } catch (e) {
+      updateSection(sIdx, { ...RESET_EXTRACTION, extractionStatus: 'error', extractionError: getAiErrorMessage(e?.message || e) });
       showToast('Something went wrong', 'error');
     }
   }, [sections, testData]);
+
+  // ── Review edits: recompute grading list, counts and issues from the edited tree ──
+  const handleTreeChange = (sIdx, tree) => {
+    setSections(prev => prev.map((s, i) => {
+      if (i !== sIdx) return s;
+      const summary = summarizeQuestionTree(tree, {
+        paperTotalMarks: s.paperTotalMarks,
+        section: `Section ${s.label}`,
+        sectionType: s.type,
+        staticIssues: s.staticIssues,
+      });
+      return {
+        ...s,
+        questionTree: tree,
+        questions: summary.questions,
+        questionCounts: summary.counts,
+        extractionIssues: summary.issues,
+        extractionMsg: extractionSummary(summary.counts),
+        reviewConfirmed: false,
+      };
+    }));
+  };
+
+  const handleReExtract = (sIdx) => {
+    Alert.alert('Extract again?', 'This replaces the extracted questions and any corrections you made. Your photos are kept.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Extract again', onPress: () => handleSectionExtract(sIdx) },
+    ]);
+  };
 
   // ── Direct MCQ key handler ──
   const handleDirectKeyChange = (txt) => {
@@ -251,8 +325,17 @@ export default function QuestionTypeScreen({ navigation, route }) {
           // Non-MCQ sections need extracted or manually typed questions
           const hasExtracted = sec.extractionDone && sec.questions.length > 0;
           const hasManual = sec.manualQuestions.some(q => q && q.trim());
+          if (sec.extracting) {
+            showToast(`Section ${sec.label}: Wait for extraction to finish`, 'error');
+            return;
+          }
           if (!hasExtracted && !hasManual) {
             showToast(`Section ${sec.label}: Upload & extract questions, or type them manually`, 'error');
+            return;
+          }
+          if (hasExtracted && !sec.reviewConfirmed) {
+            setExpandedSection(sections.indexOf(sec));
+            showToast(`Section ${sec.label}: Review and confirm the extracted questions`, 'error');
             return;
           }
         }
@@ -289,10 +372,13 @@ export default function QuestionTypeScreen({ navigation, route }) {
             number: i + 1, text, type: s.type, section: `Section ${s.label}`, maxPoints: 0,
           }));
         }
+        const hasTree = s.questions.length > 0 && s.questionTree?.length > 0;
         return {
           label: s.label,
           type: s.type,
           questions,
+          questionTree: hasTree ? s.questionTree : undefined,
+          questionCounts: hasTree ? s.questionCounts : undefined,
           markingKey: s.type === 'mcq' ? s.markingKey : undefined,
           mcqOptions: s.type === 'mcq' ? s.mcqOptions : undefined,
           images: s.images,
@@ -542,7 +628,7 @@ export default function QuestionTypeScreen({ navigation, route }) {
 
                 {sections.map((section, sIdx) => {
                   const isExpanded = expandedSection === sIdx;
-                  const sectionDone = section.extractionDone && section.questions.length > 0;
+                  const sectionDone = section.extractionDone && section.questions.length > 0 && section.reviewConfirmed;
                   const sectionHasManual = section.manualQuestions.some(q => q && q.trim());
                   const mcqExpected = parseInt(section.mcqQuestionCount, 10) || 0;
                   const mcqReady = section.type === 'mcq' && mcqExpected > 0 && section.markingKey?.length === mcqExpected;
@@ -691,79 +777,100 @@ export default function QuestionTypeScreen({ navigation, route }) {
                                   {section.images.map((uri, imgI) => (
                                     <View key={imgI} style={styles.thumbWrap}>
                                       <Image source={{ uri }} style={styles.thumb} resizeMode="cover" />
-                                      <TouchableOpacity style={styles.thumbRemove} onPress={() => removeSectionImage(sIdx, imgI)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                                        <Ionicons name="close-circle" size={20} color={colors.error} />
-                                      </TouchableOpacity>
+                                      {!section.extracting && (
+                                        <TouchableOpacity style={styles.thumbRemove} onPress={() => removeSectionImage(sIdx, imgI)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                          <Ionicons name="close-circle" size={20} color={colors.error} />
+                                        </TouchableOpacity>
+                                      )}
                                       <Text style={styles.thumbLabel}>Page {imgI + 1}</Text>
                                     </View>
                                   ))}
                                 </View>
                               )}
 
-                              <View style={styles.uploadRow}>
-                                <TouchableOpacity style={styles.uploadBtn} onPress={() => handleSectionTakePhoto(sIdx)} activeOpacity={0.7}>
-                                  <Ionicons name="camera-outline" size={20} color={colors.secondary} />
-                                  <Text style={[styles.uploadBtnText, { fontSize: 13 }]}>Camera</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity style={styles.uploadBtn} onPress={() => handleSectionPickGallery(sIdx)} activeOpacity={0.7}>
-                                  <Ionicons name="images-outline" size={20} color={colors.secondary} />
-                                  <Text style={[styles.uploadBtnText, { fontSize: 13 }]}>Gallery</Text>
-                                </TouchableOpacity>
-                              </View>
+                              {!section.extracting && (
+                                <View style={styles.uploadRow}>
+                                  <TouchableOpacity style={styles.uploadBtn} onPress={() => handleSectionTakePhoto(sIdx)} activeOpacity={0.7}>
+                                    <Ionicons name="camera-outline" size={20} color={colors.secondary} />
+                                    <Text style={[styles.uploadBtnText, { fontSize: 13 }]}>Camera</Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity style={styles.uploadBtn} onPress={() => handleSectionPickGallery(sIdx)} activeOpacity={0.7}>
+                                    <Ionicons name="images-outline" size={20} color={colors.secondary} />
+                                    <Text style={[styles.uploadBtnText, { fontSize: 13 }]}>Gallery</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              )}
 
-                              {/* Extract button */}
-                              {section.images.length > 0 && !section.extractionDone && (
-                                <TouchableOpacity
-                                  style={[styles.extractBtn, section.extracting && { opacity: 0.6 }]}
-                                  onPress={() => handleSectionExtract(sIdx)}
-                                  disabled={section.extracting}
-                                  activeOpacity={0.7}
-                                >
-                                  {section.extracting ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="sparkles" size={18} color="#fff" />}
-                                  <Text style={styles.extractBtnText}>{section.extracting ? 'Reading...' : 'Extract Questions'}</Text>
+                              {/* Extract button (idle) */}
+                              {section.images.length > 0 && section.extractionStatus === 'idle' && (
+                                <TouchableOpacity style={styles.extractBtn} onPress={() => handleSectionExtract(sIdx)} activeOpacity={0.7}>
+                                  <Ionicons name="sparkles" size={18} color="#fff" />
+                                  <Text style={styles.extractBtnText}>Extract Questions</Text>
                                 </TouchableOpacity>
                               )}
 
-                              {/* Extraction status */}
-                              {section.extractionMsg ? (
-                                <View style={[styles.extractStatus, {
-                                  backgroundColor: sectionDone ? colors.success + '15' : section.extracting ? colors.info + '15' : colors.warning + '15',
-                                }]}>
-                                  <Ionicons
-                                    name={sectionDone ? 'checkmark-circle' : section.extracting ? 'hourglass-outline' : 'alert-circle'}
-                                    size={16}
-                                    color={sectionDone ? colors.success : section.extracting ? colors.info : colors.warning}
-                                  />
-                                  <Text style={[styles.extractStatusText, {
-                                    color: sectionDone ? colors.success : section.extracting ? colors.info : colors.warning,
-                                  }]}>{section.extractionMsg}</Text>
+                              {/* Loading */}
+                              {section.extractionStatus === 'loading' && (
+                                <View style={[styles.extractStatus, { backgroundColor: colors.info + '15' }]} accessibilityLiveRegion="polite">
+                                  <ActivityIndicator size="small" color={colors.info} />
+                                  <Text style={[styles.extractStatusText, { color: colors.info }]}>{section.extractionMsg || 'Reading...'}</Text>
                                 </View>
-                              ) : null}
+                              )}
 
-                              {/* Extracted questions preview */}
-                              {section.questions.length > 0 && (
-                                <View style={{ marginBottom: 8 }}>
-                                  {section.questions.slice(0, 8).map((q, qi) => (
-                                    <View key={qi} style={styles.extractedQRow}>
-                                      <View style={[styles.qTypeBadge, { backgroundColor: colors.secondary + '20' }]}>
-                                        <Text style={[styles.qTypeBadgeText, { color: colors.secondary }]}>Q{q.number}</Text>
-                                      </View>
-                                      <Text style={styles.extractedQText} numberOfLines={1}>{q.text}</Text>
-                                      {q.maxPoints > 0 && <Text style={styles.extractedQPts}>{q.maxPoints}pts</Text>}
-                                    </View>
-                                  ))}
-                                  {section.questions.length > 8 && (
-                                    <Text style={[typography.caption, { color: colors.textLight }]}>+ {section.questions.length - 8} more</Text>
+                              {/* Extraction failure — photos are kept, retry available */}
+                              {section.extractionStatus === 'error' && (
+                                <View style={[styles.extractStatus, { backgroundColor: colors.error + '12', flexDirection: 'column', alignItems: 'stretch' }]} accessibilityLiveRegion="polite">
+                                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
+                                    <Ionicons name="close-circle" size={16} color={colors.error} />
+                                    <Text style={[styles.extractStatusText, { color: colors.error }]}>
+                                      Couldn't extract questions. {section.extractionError}
+                                    </Text>
+                                  </View>
+                                  <Text style={[typography.caption, { color: colors.textSecondary, marginTop: 4, marginLeft: 24 }]}>
+                                    Your photos are kept. Retry, retake a clearer photo, or type the questions manually.
+                                  </Text>
+                                  <TouchableOpacity style={[styles.extractBtn, { marginTop: 10, marginBottom: 0 }]} onPress={() => handleSectionExtract(sIdx)} activeOpacity={0.7}>
+                                    <Ionicons name="refresh" size={18} color="#fff" />
+                                    <Text style={styles.extractBtnText}>Retry Extraction</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              )}
+
+                              {/* Success / partial + review */}
+                              {(section.extractionStatus === 'success' || section.extractionStatus === 'partial') && (
+                                <>
+                                  <View style={[styles.extractStatus, {
+                                    backgroundColor: section.extractionStatus === 'success' ? colors.success + '15' : colors.warning + '15',
+                                  }]}>
+                                    <Ionicons
+                                      name={section.extractionStatus === 'success' ? 'checkmark-circle' : 'alert-circle'}
+                                      size={16}
+                                      color={section.extractionStatus === 'success' ? colors.success : colors.warning}
+                                    />
+                                    <Text style={[styles.extractStatusText, { color: section.extractionStatus === 'success' ? colors.success : colors.warning }]}>
+                                      {section.extractionMsg}
+                                      {section.extractionStatus === 'partial' ? ' Some content needs checking — see the flagged items below.' : ' Please review before grading.'}
+                                    </Text>
+                                  </View>
+                                  {section.questionCounts && (
+                                    <QuestionReviewEditor
+                                      tree={section.questionTree}
+                                      counts={section.questionCounts}
+                                      issues={section.extractionIssues}
+                                      instructions={section.instructions}
+                                      confirmed={section.reviewConfirmed}
+                                      onChange={(tree) => handleTreeChange(sIdx, tree)}
+                                      onConfirm={() => {
+                                        updateSection(sIdx, { reviewConfirmed: true });
+                                        showToast(`Section ${section.label} questions confirmed`, 'success');
+                                      }}
+                                    />
                                   )}
-                                </View>
-                              )}
-
-                              {/* Retry */}
-                              {section.extractionDone && (
-                                <TouchableOpacity style={styles.retryLink} onPress={() => updateSection(sIdx, { extractionDone: false, questions: [], extractionMsg: '' })}>
-                                  <Ionicons name="refresh" size={14} color={colors.secondary} />
-                                  <Text style={[typography.caption, { color: colors.secondary, marginLeft: 4 }]}>Re-extract</Text>
-                                </TouchableOpacity>
+                                  <TouchableOpacity style={[styles.retryLink, { marginTop: 8 }]} onPress={() => handleReExtract(sIdx)}>
+                                    <Ionicons name="refresh" size={14} color={colors.secondary} />
+                                    <Text style={[typography.caption, { color: colors.secondary, marginLeft: 4 }]}>Re-extract</Text>
+                                  </TouchableOpacity>
+                                </>
                               )}
 
                               {/* Manual question entry — when no images uploaded */}
