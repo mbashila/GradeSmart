@@ -1,6 +1,7 @@
 import React from 'react';
-import { extractStudentAnswers, gradeEssayTextWithOpenAI, gradeDiagramWithVision } from '../utils/openaiService';
-import { answersForGrading, deriveQuestionStatuses, buildQuestionIndex, reviewSummary } from '../utils/answerMatching';
+import { extractStudentAnswers, gradeResultWithAI } from '../utils/openaiService';
+import { deriveQuestionStatuses, buildQuestionIndex, reviewSummary } from '../utils/answerMatching';
+import { createGradingResult, newResultId, updateSectionAnswers, computeTotals, resultStatus, toLegacyScores } from '../utils/gradingModel';
 import { getAiErrorMessage } from '../utils/errors';
 import { useNotifications } from '../context/NotificationsContext';
 
@@ -21,8 +22,9 @@ export default function useEssayGradingPipeline(params) {
     setScores = () => {},
     subject = '',
     gradeLevel = '',
-    diagramIndices = new Set(),
     studentName = 'Student',
+    testId = '',
+    reviewerId = 'teacher',
   } = params || {};
 
   const { addNotification } = useNotifications();
@@ -38,6 +40,10 @@ export default function useEssayGradingPipeline(params) {
   // { sections: [{ key, label, type, images, questions, startIdx, features, status, error, records, completeness, completeOverride, failedPages, issues, questionStatuses }] }
   const [answerReview, setAnswerReview] = React.useState(null);
   const lastImagesRef = React.useRef(null);
+  // Stage 3 grading result (gradingModel). One stable id per script so re-saves update, not duplicate.
+  const [gradingResult, setGradingResult] = React.useState(null);
+  const [gradingBusyIds, setGradingBusyIds] = React.useState([]);
+  const resultIdRef = React.useRef(null);
 
   const markDone = React.useCallback((message = '') => {
     setPipelineMsg(message);
@@ -62,12 +68,15 @@ export default function useEssayGradingPipeline(params) {
           questions: qs,
           startIdx,
           features: { hasDiagrams: !!sec.hasDiagrams },
+          questionTree: sec.questionTree || [],
+          instructions: sec.instructions || [],
         };
       }).filter(u => u.questions.length > 0);
     }
+    // Without extracted questions, max marks come from an even split of the test total — flagged as assumed.
     const qs = Array.isArray(questions) && questions.length
       ? questions.slice(0, questionCount || questions.length)
-      : Array.from({ length: questionCount }, (_, i) => ({ number: i + 1, text: questionTexts[i] || `Question ${i + 1}`, maxPoints: scores[i]?.maxPoints || 0 }));
+      : Array.from({ length: questionCount }, (_, i) => ({ number: i + 1, text: questionTexts[i] || `Question ${i + 1}`, maxPoints: scores[i]?.maxPoints || 0, maxAssumed: true }));
     return [{ key: 's0', label: '', type: '', images: images || [], expectedPages: null, questions: qs, startIdx: 0, features: {} }];
   }, [sectionImages, sectionData, questions, questionCount, questionTexts, images]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -180,6 +189,49 @@ export default function useEssayGradingPipeline(params) {
     });
   }, [answerReview, readUnit, syncTexts]);
 
+  // ── Grading (Stage 3): build a grading result from the reviewed answers, grade per item ──
+  const buildResult = React.useCallback((sections) => {
+    if (!resultIdRef.current) resultIdRef.current = newResultId();
+    return createGradingResult({
+      id: resultIdRef.current,
+      sections: sections.map(sec => ({
+        key: sec.key,
+        label: sec.label,
+        type: sec.type,
+        questions: sec.questions,
+        questionTree: sec.questionTree,
+        instructions: sec.instructions,
+        records: sec.records || [],
+        complete: isComplete(sec),
+        completenessReasons: sec.completeness?.reasons || [],
+        extractionFailed: sec.status === 'error',
+        images: sec.images,
+      })),
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the legacy per-question arrays (used by the Mixed screen and older UI) in sync with the result.
+  const syncLegacy = React.useCallback((result) => {
+    setScores(prev => toLegacyScores(result, prev));
+    setAiFeedback(result.items.map(i => i.rationale || i.flags[0]?.message || i.failureReason || ''));
+    setTranscriptions(result.items.map(i => i.answerText || ''));
+  }, [setScores]);
+
+  const updateGradingResult = React.useCallback((updater) => {
+    setGradingResult((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      if (next) syncLegacy(next);
+      return next;
+    });
+  }, [syncLegacy]);
+
+  const summaryMessage = (result) => {
+    const t = computeTotals(result);
+    const status = resultStatus(result);
+    if (status === 'failed') return "Grading failed. Your answers are kept — retry grading, or score manually.";
+    return `${t.scored} of ${t.assessable} item${t.assessable === 1 ? '' : 's'} graded${t.needsReview ? ` — ${t.needsReview} need${t.needsReview === 1 ? 's' : ''} review` : ''}. Results are provisional until finalized.`;
+  };
+
   const handleConfirmOCR = React.useCallback(async () => {
     const sections = answerReview?.sections || [];
     if (!sections.length) {
@@ -188,101 +240,58 @@ export default function useEssayGradingPipeline(params) {
     }
     setPipelineStep('ai');
     setPipelineMsg('Grading confirmed answers...');
-
-    // Build per-question grading input from the reviewed associations.
-    const items = [];
-    for (const sec of sections) {
-      const grading = answersForGrading(sec.questions, sec.records || [], { complete: isComplete(sec), extractionFailed: sec.status === 'error' });
-      const index = buildQuestionIndex(sec.questions);
-      grading.forEach((g, qi) => {
-        const globalIdx = sec.startIdx + qi;
-        if (globalIdx >= questionCount) return;
-        const q = sec.questions[qi] || {};
-        items.push({
-          ...g,
-          globalIdx,
-          key: `${sec.label ? `${sec.label}.` : ''}${g.number}`,
-          questionText: q.text || index[qi]?.text || `Question ${g.number}`,
-          isDiagram: q.type === 'diagram' || diagramIndices.has(globalIdx),
-          pageImage: g.pages.length ? sec.images[g.pages[0] - 1] : null,
-        });
-      });
-    }
-
-    const newScores = [...scores];
-    const newFeedback = [...aiFeedback];
-    const newTranscriptions = [...transcriptions];
-    let needsManual = 0;
-
-    const applyManual = (it, feedback, points = 0, manual = true) => {
-      const s = newScores[it.globalIdx];
-      if (!s) return;
-      newScores[it.globalIdx] = { ...s, points: Math.min(points, s.maxPoints), answerStatus: it.status, needsManual: manual, answerIds: it.answerIds };
-      newFeedback[it.globalIdx] = feedback;
-      if (manual) needsManual++;
-    };
-
+    let result = buildResult(sections);
     try {
-      for (const it of items) {
-        newTranscriptions[it.globalIdx] = it.text;
-        if (it.autoGradable) continue;
-        if (it.status === 'no_answer_detected') applyManual(it, 'No response detected in the supplied pages.', 0, false);
-        else applyManual(it, `${it.message}. Score manually.`);
-      }
-
-      const diagramItems = items.filter(it => it.autoGradable && it.isDiagram && it.pageImage);
-      let d = 0;
-      for (const it of diagramItems) {
-        d++;
-        setPipelineMsg(`Grading diagram ${d} of ${diagramItems.length}...`);
-        const max = newScores[it.globalIdx]?.maxPoints || 0;
-        try {
-          const res = await gradeDiagramWithVision(it.pageImage, { questionText: it.questionText, maxPoints: max, subject });
-          if (res.error) applyManual(it, 'AI could not grade this diagram. Score manually.');
-          else applyManual(it, res.feedback || '', res.score || 0, false);
-        } catch {
-          applyManual(it, 'AI could not grade this diagram. Score manually.');
-        }
-      }
-
-      const textItems = items.filter(it => it.autoGradable && !(it.isDiagram && it.pageImage));
-      if (textItems.length) {
-        setPipelineMsg(`Grading ${textItems.length} written answer${textItems.length === 1 ? '' : 's'}...`);
-        const aiResult = await gradeEssayTextWithOpenAI(textItems.map(it => ({
-          questionNumber: it.key,
-          questionText: it.questionText,
-          studentAnswer: it.text,
-          maxPoints: newScores[it.globalIdx]?.maxPoints || 0,
-        })), { subject, gradeLevel });
-        textItems.forEach((it, i) => {
-          const r = aiResult.results?.[i];
-          if (aiResult.error || !r || r.missing) applyManual(it, 'AI grading did not return a score for this answer. Score manually.');
-          else applyManual(it, r.feedback || '', r.score || 0, false);
-        });
-      }
+      const run = await gradeResultWithAI(result, {
+        subject,
+        gradeLevel,
+        testId,
+        onProgress: ({ done, total }) => setPipelineMsg(`Grading answers (${done}/${total})...`),
+      });
+      result = run.result;
     } catch {
-      setPipelineMsg('Grading failed. Score manually.');
+      // gradeResultWithAI does not throw by design; keep the ungraded result if it ever does.
     }
-
-    setScores(newScores);
-    setAiFeedback(newFeedback);
-    setTranscriptions(newTranscriptions);
-    setPipelineMsg(needsManual
-      ? `Graded. ${needsManual} question${needsManual === 1 ? ' needs' : 's need'} a manual score — see the flagged items.`
-      : 'Review scores below.');
+    updateGradingResult(result);
+    setPipelineMsg(summaryMessage(result));
     setPipelineStep('done');
     setPipelineDone(true);
-
-    const finalScore = newScores.reduce((sum, s) => sum + (s.points || 0), 0);
-    const total = newScores.reduce((sum, s) => sum + (s.maxPoints || 0), 0);
-    addNotification({ type: 'success', title: 'Grading complete', message: `Grading completed for ${studentName}. Score: ${finalScore}/${total}` });
-  }, [answerReview, scores, aiFeedback, transcriptions, questionCount, diagramIndices, subject, gradeLevel, setScores, markDone, addNotification, studentName]); // eslint-disable-line react-hooks/exhaustive-deps
+    const t = computeTotals(result);
+    addNotification({ type: 'success', title: 'Grading complete', message: `Provisional result for ${studentName}: ${t.awarded}${t.available !== null ? `/${t.available}` : ''}${t.needsReview ? ` — ${t.needsReview} item(s) need review` : ''}.` });
+  }, [answerReview, buildResult, subject, gradeLevel, testId, markDone, updateGradingResult, addNotification, studentName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSkipAI = React.useCallback(() => {
+    if (answerReview?.sections?.length) updateGradingResult(buildResult(answerReview.sections));
     setPipelineMsg('Score manually using the extracted answers.');
     setPipelineStep('done');
     setPipelineDone(true);
-  }, []);
+  }, [answerReview, buildResult, updateGradingResult]);
+
+  /** Regrade only the listed items (e.g. after an edit or a failed request). Other items are untouched. */
+  const regradeItems = React.useCallback(async (ids, base = null) => {
+    const source = base || gradingResult;
+    if (!source || !ids?.length) return;
+    setGradingBusyIds(prev => [...new Set([...prev, ...ids])]);
+    try {
+      const run = await gradeResultWithAI(source, { ids, subject, gradeLevel, testId });
+      updateGradingResult(prev => ({
+        ...(prev || run.result),
+        items: (prev || run.result).items.map(i => (ids.includes(i.id) ? run.result.items.find(x => x.id === i.id) || i : i)),
+        updatedAt: run.result.updatedAt,
+      }));
+    } finally {
+      setGradingBusyIds(prev => prev.filter(id => !ids.includes(id)));
+    }
+  }, [gradingResult, subject, gradeLevel, testId, updateGradingResult]);
+
+  /** Apply corrected answer records (association or text) and regrade only the affected items. */
+  const applyAnswerChange = React.useCallback(async (sectionKey, records) => {
+    if (!gradingResult) return;
+    const { result, changedItemIds } = updateSectionAnswers(gradingResult, sectionKey, records, reviewerId);
+    updateGradingResult(result);
+    setAnswerReview(prev => (prev ? { sections: prev.sections.map(s => (s.key === sectionKey ? withStatuses({ ...s, records }) : s)) } : prev));
+    if (changedItemIds.length) await regradeItems(changedItemIds, result);
+  }, [gradingResult, reviewerId, updateGradingResult, regradeItems]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRetry = React.useCallback(async () => {
     setPipelineDone(false);
@@ -332,6 +341,11 @@ export default function useEssayGradingPipeline(params) {
     setSectionComplete,
     retrySection,
     getAnswerRecordsForSave,
+    gradingResult,
+    updateGradingResult,
+    regradeItems,
+    applyAnswerChange,
+    gradingBusyIds,
     runOcrOnAllPages,
     handleConfirmOCR,
     handleSkipAI,

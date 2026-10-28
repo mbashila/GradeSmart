@@ -5,6 +5,9 @@ import secureStorage from './secureStorage';
 import { rateLimit } from './security';
 import { runPaperExtraction } from './paperExtraction';
 import { runAnswerExtraction } from './answerExtraction';
+import { gradeResultItems } from './rubricGrading';
+import { loadRubricCache, saveRubricCache } from './rubricCache';
+import { getAiErrorMessage } from './errors';
 
 const KEY_STORAGE = 'openai_api_key';
 
@@ -221,7 +224,7 @@ export async function queryOpenAIVision(imageUri, prompt, options = {}) {
  * @returns {Promise<{ response: string, error?: string }>}
  */
 export async function queryOpenAIText(prompt, options = {}) {
-  const { timeoutMs = 60000, maxTokens = 1024 } = options;
+  const { timeoutMs = 60000, maxTokens = 1024, useFullModel = false, jsonMode = false, system = '' } = options;
 
   if (!rateLimit('openai_text', 30)) {
     return { response: '', error: 'Too many requests. Please wait a moment.' };
@@ -231,7 +234,7 @@ export async function queryOpenAIText(prompt, options = {}) {
     const key = await getOpenAIKey();
     if (!key) return { response: '', error: 'No API key configured. Go to Settings to add it.' };
 
-    const modelConfig = getModelConfig();
+    const modelConfig = getModelConfig({ useFullModel });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -246,9 +249,10 @@ export async function queryOpenAIText(prompt, options = {}) {
       signal: controller.signal,
       body: JSON.stringify({
         model: modelConfig.model,
-        messages: [{ role: 'user', content: prompt }],
+        messages: [...(system ? [{ role: 'system', content: system }] : []), { role: 'user', content: prompt }],
         max_tokens: maxTokens,
-        temperature: 0.1,
+        temperature: jsonMode ? 0 : 0.1,
+        ...(jsonMode ? { response_format: { type: 'json_object' } } : null),
       }),
     });
     clearTimeout(timeout);
@@ -259,8 +263,8 @@ export async function queryOpenAIText(prompt, options = {}) {
     }
 
     const data = await res.json();
-    const content = data.choices?.[0]?.message?.content || '';
-    return { response: content };
+    const choice = data.choices?.[0];
+    return { response: choice?.message?.content || '', truncated: choice?.finish_reason === 'length' };
   } catch (e) {
     return {
       response: '',
@@ -879,6 +883,44 @@ export async function extractStudentAnswers(imageUris, questions, options = {}) 
 }
 
 /**
+ * Grade (or regrade) the items of a grading result with question-specific rubrics.
+ * See utils/rubricGrading.js and utils/gradingModel.js. Never throws; failed items are marked
+ * "failed" (not zero) with a user-safe message.
+ *
+ * @param {object} result - grading result
+ * @param {object} [options] - { ids, subject, gradeLevel, testId, onProgress }
+ * @returns {Promise<{ result, failed: number, graded: number }>}
+ */
+export async function gradeResultWithAI(result, options = {}) {
+  const { ids = null, subject = '', gradeLevel = '', testId = '', onProgress } = options;
+  const cachedCriteria = await loadRubricCache(testId);
+  const images = Object.fromEntries((result.sections || []).map(s => [s.key, s.images || []]));
+  const run = await gradeResultItems(result, {
+    ids,
+    subject,
+    gradeLevel,
+    cachedCriteria,
+    onProgress,
+    friendlyError: (e) => getAiErrorMessage(e),
+    callText: (prompt) => queryOpenAIText(prompt, {
+      useFullModel: true,
+      jsonMode: true,
+      maxTokens: 4096,
+      timeoutMs: 90000,
+      system: 'You are an experienced, fair examiner helping a teacher mark exam scripts. You return only JSON and never invent content that is not in the student answer.',
+    }),
+    gradeDiagram: async (item) => {
+      const uri = images[item.sectionKey]?.[(item.pages[0] || 1) - 1];
+      if (!uri) return { error: 'The page image for this diagram is not available.' };
+      const r = await gradeDiagramWithVision(uri, { questionText: item.questionText, maxPoints: item.maxMarks, subject });
+      return r.error ? { error: r.error } : { awarded: r.score, rationale: r.feedback, confidence: 'medium' };
+    },
+  });
+  await saveRubricCache(testId, run.newCriteria);
+  return run;
+}
+
+/**
  * Pick the model's result for each question by its number, falling back to position only when
  * the model returned no usable numbers. Prevents one omitted result from shifting every score.
  */
@@ -947,7 +989,8 @@ Do not include any explanation outside the JSON.`;
       return { score: 0, maxPoints, feedback: '', error: 'AI response did not contain valid JSON.' };
     }
     const parsed = JSON.parse(jsonMatch[0]);
-    const score = Math.min(Math.max(parseInt(parsed.score, 10) || 0, 0), maxPoints);
+    // Not clamped: callers validate the range and flag out-of-range marks for review.
+    const score = parsed.score === undefined || parsed.score === null ? NaN : parseFloat(parsed.score);
     return { score, maxPoints, feedback: parsed.feedback || '' };
   } catch (e) {
     return { score: 0, maxPoints, feedback: '', error: `Failed to parse: ${e.message}` };
