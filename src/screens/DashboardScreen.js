@@ -408,6 +408,7 @@ export default function DashboardScreen({ navigation }) {
                   key={scan.id}
                   style={styles.testCard}
                   onPress={() => navigation.navigate('Results', {
+                    scanId: scan.id,
                     studentName: scan.studentName,
                     score: scan.score,
                     percentage: scan.percentage,

@@ -402,6 +402,7 @@ export default function TestDetailsScreen({ navigation, route }) {
                   style={styles.studentCard}
                   onPress={() => {
                     navigation.navigate('Results', {
+                      scanId: student.id,
                       studentName: student.name,
                       score: student.score,
                       percentage: student.percentage,

@@ -12,6 +12,9 @@ import { getOpenAIKey } from '../utils/openaiService';
 import { splitTranscriptionByQuestions as sharedSplitTranscriptionByQuestions } from '../utils/questionUtils';
 import useEssayGradingPipeline from '../hooks/useEssayGradingPipeline';
 import AnswerMatchingReview from '../components/AnswerMatchingReview';
+import GradingResultsView from '../components/GradingResultsView';
+import { computeTotals, toGradingResultsList } from '../utils/gradingModel';
+import { useAuth } from '../context/AuthContext';
 import { getGradingMode } from '../components/SubjectPicker';
 
 /**
@@ -27,6 +30,7 @@ export default function EssayScoringScreen({ navigation, route }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
   const { images, sectionImages, testData, studentName, studentNumber } = route.params || {};
+  const { user } = useAuth();
 
   // Derive actual question count from all available sources
   const questionCount = (() => {
@@ -95,12 +99,19 @@ export default function EssayScoringScreen({ navigation, route }) {
     setSectionComplete,
     retrySection,
     getAnswerRecordsForSave,
+    gradingResult,
+    updateGradingResult,
+    regradeItems,
+    applyAnswerChange,
+    gradingBusyIds,
     runOcrOnAllPages,
     handleConfirmOCR,
     handleSkipAI,
     handleRetry,
     markDone,
   } = useEssayGradingPipeline({
+    testId: testData?.id || '',
+    reviewerId: user?.id || 'teacher',
     images,
     sectionImages: sectionImages || null,
     sectionData: testData?.sectionData || [],
@@ -164,7 +175,24 @@ export default function EssayScoringScreen({ navigation, route }) {
   const maxScore = scores.reduce((sum, s) => sum + s.maxPoints, 0);
   const pct = maxScore > 0 ? Math.round((currentScore / maxScore) * 100) : 0;
 
+  const openResults = () => {
+    const t = computeTotals(gradingResult);
+    navigation.navigate('Results', {
+      images,
+      testData,
+      studentName: studentName || 'Student',
+      studentNumber: studentNumber || '',
+      score: String(t.awarded),
+      percentage: t.percentage !== null ? `${t.percentage}%` : null,
+      gradingResults: toGradingResultsList(gradingResult),
+      gradingType: 'essay',
+      answerRecords: getAnswerRecordsForSave(),
+      gradingResult,
+    });
+  };
+
   const finishGrading = () => {
+    if (gradingResult) { openResults(); return; }
     const result = gradeEssay(scores);
     navigation.navigate('Results', {
       images,
@@ -180,6 +208,7 @@ export default function EssayScoringScreen({ navigation, route }) {
   };
 
   const handleGrade = () => {
+    if (gradingResult) { openResults(); return; }
     const manual = scores.filter(s => s.needsManual).length;
     if (!manual) { finishGrading(); return; }
     Alert.alert(
@@ -242,6 +271,38 @@ export default function EssayScoringScreen({ navigation, route }) {
               onScoreManually={handleSkipAI}
               onRescanAll={handleRetry}
             />
+          </AnimatedScreen>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // Stage 3: hierarchical, editable grading result
+  if (gradingResult) {
+    return (
+      <View style={styles.container}>
+        <Header title="Review Marks" onBack={() => navigation.goBack()} />
+        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+          <AnimatedScreen>
+            <Text style={styles.title}>Grading results</Text>
+            {pipelineMsg ? <Text style={[typography.bodySmall, { color: colors.textSecondary, marginBottom: 12 }]}>{pipelineMsg}</Text> : null}
+            <GradingResultsView
+              result={gradingResult}
+              onChange={updateGradingResult}
+              onRegrade={regradeItems}
+              onAnswerChange={applyAnswerChange}
+              busyIds={gradingBusyIds}
+              reviewerId={user?.id || 'teacher'}
+            />
+            <View style={{ gap: 10, marginTop: 16 }}>
+              <Button title="Continue to Results" onPress={openResults} variant="primary" disabled={gradingBusyIds.length > 0} />
+              {openaiOk && (
+                <TouchableOpacity style={styles.retryBtn} onPress={handleRetry} disabled={gradingBusyIds.length > 0}>
+                  <Ionicons name="refresh" size={18} color="#fff" />
+                  <Text style={styles.retryBtnText}>Re-scan & Re-grade</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </AnimatedScreen>
         </ScrollView>
       </View>

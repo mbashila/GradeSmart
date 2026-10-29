@@ -12,19 +12,71 @@ import { typography } from '../theme/typography';
 import { useScans } from '../context/ScansContext';
 import { useToast } from '../components/Toast';
 import { getActionErrorMessage, logError } from '../utils/errors';
+import { useAuth } from '../context/AuthContext';
+import GradingResultsView from '../components/GradingResultsView';
+import { computeTotals, toGradingResultsList, updateSectionAnswers, resultStatus } from '../utils/gradingModel';
+import { gradeResultWithAI } from '../utils/openaiService';
 
 export default function ResultsScreen({ navigation, route }) {
   const colors = useColors();
   const styles = React.useMemo(() => makeStyles(colors), [colors]);
-  const { studentName, studentNumber, score, percentage, testData, images, gradingResults, gradingType, isDirectFlow, answerRecords } = route.params || {};
-  const [currentView, setCurrentView] = useState('individual'); // 'individual' or 'list'
   const { scans, addScan } = useScans();
+  const { user } = useAuth();
+  const reviewerId = user?.id || 'teacher';
+  // Reopening a saved result: load everything from the stored scan, not from route params.
+  const savedScan = route.params?.scanId ? scans?.find(s => s.id === route.params.scanId) : null;
+  const params = savedScan ? { ...route.params, ...savedScan, percentage: savedScan.percentage } : (route.params || {});
+  const { studentName, studentNumber, testData, images, gradingType, isDirectFlow, answerRecords } = params;
+  const [currentView, setCurrentView] = useState('individual'); // 'individual' or 'list'
   const { showToast } = useToast();
-  const testId = route?.params?.testId || testData?.id || null;
+  const testId = route?.params?.testId || params.testId || testData?.id || null;
   const [exporting, setExporting] = useState(false);
+  const [result, setResult] = useState(params.gradingResult || null);
+  const [busyIds, setBusyIds] = useState([]);
+  const [saveState, setSaveState] = useState(savedScan ? 'saved' : 'unsaved'); // unsaved | saving | saved | local | error
+  const [saveError, setSaveError] = useState('');
+  useEffect(() => { if (!result && savedScan?.gradingResult) setResult(savedScan.gradingResult); }, [savedScan?.gradingResult]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const totals = result ? computeTotals(result) : null;
+  const score = totals ? String(totals.awarded) : params.score;
+  const percentage = totals ? (totals.percentage !== null ? `${totals.percentage}%` : null) : params.percentage;
+  const gradingResults = result ? toGradingResultsList(result) : params.gradingResults;
+  const hasPct = percentage !== null && percentage !== undefined && percentage !== '';
 
   const normalizedName = (studentName || 'Student').trim().toLowerCase();
-  const isExisting = scans?.some((s) => (s.testId === testId) && ((s.studentName || '').trim().toLowerCase() === normalizedName));
+  // A different saved scan for the same student blocks saving; the same record (same id) can be updated.
+  const isExisting = scans?.some((s) => (s.testId === testId) && ((s.studentName || '').trim().toLowerCase() === normalizedName) && (!result || s.id !== result.id));
+  const isUpdate = !!result && scans?.some(s => s.id === result.id);
+
+  const handleRegrade = useCallback(async (ids, base) => {
+    const source = base || result;
+    if (!source) return;
+    setBusyIds(prev => [...new Set([...prev, ...ids])]);
+    try {
+      const run = await gradeResultWithAI(source, { ids, subject: testData?.subject || '', gradeLevel: testData?.grade || '', testId: testId || '' });
+      setResult(prev => ({ ...(prev || run.result), items: (prev || run.result).items.map(i => (ids.includes(i.id) ? run.result.items.find(x => x.id === i.id) || i : i)), updatedAt: run.result.updatedAt }));
+      setSaveState(s => (s === 'saved' ? 'unsaved' : s));
+      if (run.failed) showToast('Some items could not be graded. They are marked for retry.', 'warning');
+    } finally {
+      setBusyIds(prev => prev.filter(id => !ids.includes(id)));
+    }
+  }, [result, testData, testId, showToast]);
+
+  const handleAnswerChange = useCallback(async (sectionKey, records) => {
+    try {
+      const { result: next, changedItemIds } = updateSectionAnswers(result, sectionKey, records, reviewerId);
+      setResult(next);
+      setSaveState('unsaved');
+      if (changedItemIds.length) await handleRegrade(changedItemIds, next);
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  }, [result, reviewerId, handleRegrade, showToast]);
+
+  const handleResultChange = useCallback((next) => {
+    setResult(next);
+    setSaveState('unsaved');
+  }, []);
 
   // Determine if this is the last student to grade
   const expectedStudents = parseInt(testData?.numberOfStudents, 10) || 0;
@@ -47,7 +99,7 @@ export default function ResultsScreen({ navigation, route }) {
 
     const questionsHTML = individualResults.map((r, i) => {
       const statusColor = r.status === 'correct' ? '#22c55e' : r.status === 'partial' ? '#f59e0b' : '#ef4444';
-      const statusLabel = r.status === 'correct' ? 'Correct' : r.status === 'partial' ? 'Partial' : 'Incorrect';
+      const statusLabel = r.status === 'correct' ? 'Correct' : r.status === 'partial' ? 'Partial' : r.status === 'review' ? 'Needs review' : 'Incorrect';
       const isMCQ = gradingType === 'mcq' || (r.correct && r.student && r.correct.length === 1);
       return `
         <tr>
@@ -56,10 +108,10 @@ export default function ResultsScreen({ navigation, route }) {
             <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">${r.correct || '-'}</td>
             <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">${r.student || '-'}</td>
           ` : `
-            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;" colspan="2">${r.points || 0} / ${r.maxPoints || r.points || 0}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;" colspan="2">${r.points ?? '—'} / ${r.maxPoints ?? '—'}${r.gradingStatus && !['graded', 'manual', 'blank'].includes(r.gradingStatus) ? ' (needs review)' : ''}${r.counted === false ? ' (not counted)' : ''}</td>
           `}
           <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:${statusColor};font-weight:600;">${statusLabel}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-weight:700;">${r.points ?? 0}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-weight:700;">${r.points ?? '—'}</td>
         </tr>`;
     }).join('');
 
@@ -185,17 +237,17 @@ export default function ResultsScreen({ navigation, route }) {
     }
   }, [generateHTML]);
 
-  const handleNext = () => {
-    if (isExisting) {
-      showToast('A saved result already exists for this student in this test and cannot be edited.', 'error');
-      return;
-    }
-    // Save scanned paper to context, then navigate to next student or back to scan
+  // Idempotent save: graded scripts use the grading result id, so retries update instead of duplicating.
+  const saveScan = async () => {
+    setSaveState('saving');
+    setSaveError('');
     try {
-      addScan({
+      const res = await addScan({
+        ...(result ? { id: result.id } : null),
         studentName: studentName || 'Student',
         studentNumber: studentNumber || '',
         score: score || null,
+        maxScore: totals ? totals.available : null,
         percentage: percentage || null,
         testData: testData || {},
         images: images || [],
@@ -203,13 +255,31 @@ export default function ResultsScreen({ navigation, route }) {
         testId,
         gradingResults: gradingResults || [],
         gradingType: gradingType || null,
+        ...(result ? { gradingResult: result, gradingStatus: resultStatus(result) } : null),
         ...(Array.isArray(answerRecords) && answerRecords.length ? { answerRecords } : null),
-      }).then((res) => {
-        if (res?.syncError) showToast("Saved on this device only. Couldn't sync to your account.", 'warning');
       });
+      if (res?.error) {
+        setSaveState('error');
+        setSaveError(typeof res.error === 'string' ? res.error : getActionErrorMessage(res.error, "Couldn't save the result."));
+        return false;
+      }
+      if (res?.syncError) {
+        setSaveState('local');
+        setSaveError(getActionErrorMessage(res.syncError, "Saved on this device only — couldn't sync to your account."));
+        return false;
+      }
+      setSaveState('saved');
+      return true;
     } catch (e) {
       logError('SCANS', e, { operation: 'save scan' });
+      setSaveState('error');
+      setSaveError(getActionErrorMessage(e, "Couldn't save the result."));
+      return false;
     }
+  };
+
+  const proceed = () => {
+    if (savedScan || route.params?.scanId) { navigation.goBack(); return; }
     if (isLastStudent) {
       showToast(`All ${expectedStudents} students graded!`, 'success');
       navigation.navigate('Dashboard');
@@ -223,6 +293,18 @@ export default function ResultsScreen({ navigation, route }) {
         // Push a fresh Scan screen for the next student's paper
         navigation.push('Scan', { testData });
       }
+    }
+  };
+
+  const handleNext = async () => {
+    if (isExisting) {
+      showToast('A different saved result already exists for this student in this test.', 'error');
+      return;
+    }
+    const ok = await saveScan();
+    if (ok) {
+      if (result && resultStatus(result) !== 'finalized') showToast('Saved as provisional. Finalize after review.', 'info');
+      proceed();
     }
   };
   
@@ -262,8 +344,8 @@ export default function ResultsScreen({ navigation, route }) {
           <Card style={styles.scoreCard}>
             <View style={styles.scoreMain}>
               <View style={styles.scoreLeft}>
-                <Text style={styles.scoreValue}>{score || '0'}</Text>
-                <Text style={styles.scoreLabel}>Points Total</Text>
+                <Text style={styles.scoreValue}>{score || '0'}{totals?.available !== null && totals?.available !== undefined ? ` / ${totals.available}` : ''}</Text>
+                <Text style={styles.scoreLabel}>{result ? (resultStatus(result) === 'finalized' ? 'Final total' : 'Provisional total') : 'Points Total'}</Text>
                 <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
                   <View style={[styles.statChip, { backgroundColor: colors.success + '15' }]}>
                     <Ionicons name="checkmark" size={12} color={colors.success} />
@@ -281,6 +363,7 @@ export default function ResultsScreen({ navigation, route }) {
                   </View>
                 </View>
               </View>
+              {hasPct ? (
               <View style={styles.scoreRight}>
                 <View style={[styles.percentageCircle, {
                   backgroundColor: (parseInt(percentage) >= 50 ? colors.success : colors.error) + '15',
@@ -295,11 +378,29 @@ export default function ResultsScreen({ navigation, route }) {
                   }]}>{parseInt(percentage) >= 50 ? 'Pass' : 'Fail'}</Text>
                 </View>
               </View>
+              ) : (
+                <View style={styles.scoreRight}>
+                  <Text style={[typography.caption, { color: colors.textSecondary, maxWidth: 120, textAlign: 'center' }]}>Percentage not available — total marks unknown</Text>
+                </View>
+              )}
             </View>
           </Card>
         </AnimatedScreen>
         
         <AnimatedScreen delay={120}>
+          {result ? (
+            <View style={styles.resultsSection}>
+              <Text style={styles.sectionTitle}>Question Results</Text>
+              <GradingResultsView
+                result={result}
+                onChange={handleResultChange}
+                onRegrade={handleRegrade}
+                onAnswerChange={handleAnswerChange}
+                busyIds={busyIds}
+                reviewerId={reviewerId}
+              />
+            </View>
+          ) : (
           <View style={styles.resultsSection}>
             <Text style={styles.sectionTitle}>Question Results</Text>
             
@@ -349,8 +450,23 @@ export default function ResultsScreen({ navigation, route }) {
               );
             })}
           </View>
+          )}
         </AnimatedScreen>
       </ScrollView>
+
+      {(saveState === 'local' || saveState === 'error') && (
+        <View style={[styles.saveBanner, { backgroundColor: (saveState === 'error' ? colors.error : colors.warning) + '18' }]}>
+          <Text style={[typography.caption, { color: colors.text, flex: 1 }]}>{saveError}</Text>
+          <TouchableOpacity onPress={saveScan} style={{ padding: 8 }} accessibilityRole="button">
+            <Text style={[typography.caption, { color: colors.secondary, fontWeight: '700' }]}>Retry</Text>
+          </TouchableOpacity>
+          {saveState === 'local' && (
+            <TouchableOpacity onPress={proceed} style={{ padding: 8 }} accessibilityRole="button">
+              <Text style={[typography.caption, { color: colors.secondary, fontWeight: '700' }]}>Continue</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
       
       {/* Action Buttons */}
       <AnimatedScreen delay={180}>
@@ -374,11 +490,19 @@ export default function ResultsScreen({ navigation, route }) {
               onPress={() => navigation.navigate('Dashboard')}
               variant="primary"
             />
+          ) : isUpdate || savedScan ? (
+            <Button
+              title={saveState === 'saved' ? 'Saved' : saveState === 'saving' ? 'Saving…' : 'Save changes'}
+              onPress={async () => { if (await saveScan()) showToast('Changes saved.', 'success'); }}
+              variant="primary"
+              disabled={saveState === 'saved' || saveState === 'saving' || busyIds.length > 0}
+            />
           ) : (
             <Button
-              title={isLastStudent ? 'Save & Finish' : `Save & Grade Next${expectedStudents > 0 ? ` (${scannedForTest + 1}/${expectedStudents})` : ''}`}
+              title={saveState === 'saving' ? 'Saving…' : isLastStudent ? 'Save & Finish' : `Save & Grade Next${expectedStudents > 0 ? ` (${scannedForTest + 1}/${expectedStudents})` : ''}`}
               onPress={handleNext}
               variant="primary"
+              disabled={saveState === 'saving' || busyIds.length > 0}
             />
           )}
         </View>
@@ -394,6 +518,12 @@ const makeStyles = (colors) => StyleSheet.create({
   },
   scrollView: {
     flex: 1,
+  },
+  saveBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 6,
   },
   scrollContent: {
     paddingHorizontal: 20,

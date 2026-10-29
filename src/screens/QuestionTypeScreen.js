@@ -379,6 +379,8 @@ export default function QuestionTypeScreen({ navigation, route }) {
           questions,
           questionTree: hasTree ? s.questionTree : undefined,
           questionCounts: hasTree ? s.questionCounts : undefined,
+          instructions: hasTree && s.instructions?.length ? s.instructions : undefined,
+          paperTotalMarks: hasTree ? s.paperTotalMarks : undefined,
           markingKey: s.type === 'mcq' ? s.markingKey : undefined,
           mcqOptions: s.type === 'mcq' ? s.mcqOptions : undefined,
           images: s.images,

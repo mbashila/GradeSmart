@@ -20,3 +20,13 @@
   duplicates, per-question statuses, review edit ops, `MATCH_THRESHOLDS`. Pure JS.
 - `src/hooks/useEssayGradingPipeline.js` — extract -> review (`AnswerMatchingReview`) -> grade only matched/confirmed answers.
 - Live check: `node --env-file=.env scripts/try-answer-extraction.mjs --paper paper.jpg booklet1.jpg [booklet2.jpg]`
+
+## Grading & results architecture (Stage 3)
+- `src/utils/gradingModel.js` — grading result model: per-item statuses, totals from leaves only, optional-question rules,
+  validation, moderation edits with audit trail, finalize/reopen. Pure JS.
+- `src/utils/rubricGrading.js` — per-item rubric prompt (own question + parent context, command verb, marking guide),
+  strict parsing (no capping), retry failed items only. Pure JS.
+- `src/utils/rubricCache.js` — per-test cache of AI-generated criteria (consistency across students).
+- `src/components/GradingResultsView.js` — hierarchical results + moderation, used by EssayScoringScreen and ResultsScreen.
+- Saved scans store `gradingResult`; reopen via `navigate('Results', { scanId })`. Saves are idempotent by result id.
+- Live end-to-end incl. grading: add `--grade` to `scripts/try-answer-extraction.mjs`.

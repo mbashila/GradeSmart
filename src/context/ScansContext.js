@@ -3,6 +3,7 @@ import storage from '../utils/storage';
 import { supabase, isSupabaseConfigured, withRequestTimeout } from '../lib/supabase';
 import { useAuth } from './AuthContext';
 import { logError } from '../utils/errors';
+import { upsertScan } from '../utils/scanStore';
 
 const GUEST_TEST_LIMIT = 1;
 const DEVICE_GUEST_COUNT_KEY = '@gradesmart:device_guest_test_count';
@@ -116,18 +117,21 @@ export function ScansProvider({ children }) {
   }, [scans, hydrated, STORAGE_KEY]);
 
   const addScan = useCallback(async (scan) => {
+    // Saving again with the same id updates the record (retry after a failed sync, or edits to a saved result).
+    const existing = scan?.id ? scansRef.current.find((s) => s.id === scan.id) : null;
+
     // Enforce device-persistent guest test limit
-    if (isGuest && deviceGuestCount >= GUEST_TEST_LIMIT) {
+    if (!existing && isGuest && deviceGuestCount >= GUEST_TEST_LIMIT) {
       return { error: `Guest accounts are limited to ${GUEST_TEST_LIMIT} tests per device. Sign up for unlimited access!` };
     }
 
     const id = scan?.id || Date.now().toString();
-    const createdAt = scan?.createdAt || new Date().toISOString();
-    const normalized = { id, createdAt, ...scan };
-    setScans((prev) => [...prev, normalized]);
+    const createdAt = existing?.createdAt || scan?.createdAt || new Date().toISOString();
+    const normalized = { id, createdAt, ...scan, createdAt };
+    setScans((prev) => upsertScan(prev, normalized));
 
     // Increment device-persistent guest count
-    if (isGuest) {
+    if (isGuest && !existing) {
       const newCount = deviceGuestCount + 1;
       setDeviceGuestCount(newCount);
       storage.setItem(DEVICE_GUEST_COUNT_KEY, String(newCount));
@@ -155,7 +159,7 @@ export function ScansProvider({ children }) {
       }
 
       // Activity logging is best-effort and never blocks saving.
-      supabase.from('activities').insert({
+      if (!existing) supabase.from('activities').insert({
         user_id: user.id,
         type: 'scan_created',
         meta: { scan_id: id, test_id: normalized.testId || null, student_name: normalized.studentName || null },
